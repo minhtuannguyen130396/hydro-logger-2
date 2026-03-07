@@ -1,0 +1,30 @@
+# Requirements (normalized)
+
+- ESP32 system measures water level using:
+  - Laser sensor OR Ultrasonic sensor (auto-failover, no dip-switch)
+- Connectivity:
+  - SIM 4G module via UART AT commands
+  - DCOM 4G providing Wi-Fi (power via GPIO)
+  - Prefer last-success module, failover on internet check timeout.
+- RTC DS1307 (accessed through non-abstract base class)
+- IO control:
+  - Power pins: laser, ultrasonic, SIM4G, DCOM
+  - Notify outputs: LED, speaker
+- Schedule:
+  - Measure + (optionally) OTA check at minutes: 00,10,20,30,40,50
+  - Sync to server only when minute == 0
+  - Outside schedule -> safe energy mode (placeholder)
+- Measuring flow:
+  - warmup sensor; if fail, switch to next sensor automatically
+  - read distance 3 samples; validate and retry up to MAX_REPEAT
+  - push measurement message and 1024B session log to queues
+- Sync flow:
+  - warmup connectivity (SIM/DCOM failover) with full logging
+  - send queued measurement + log frames within ~1 minute window
+- Notify:
+  - LED 1s on / 1s off normally
+  - if both SIM and DCOM fail to warmup -> urgent speaker pattern 0.5s on/off
+- OTA:
+  - check firmware version at URL; if new -> perform OTA
+  - build flags: TEST_OTA or DEVELOP_OTA
+- Modules are implemented as singletons (SIM, DCOM, RTC, IO, optional SensorManager)
