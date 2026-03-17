@@ -67,7 +67,7 @@ extern "C" void sync_task_entry(void* arg) {
 
         bool ok = false;
         if (cm.active() && cm.active()->type() == CommType::Sim4G) {
-          ok = cm.active()->sendPayload(json, log);
+          ok = cm.active()->sendPayload(ServerApi::measurementUrl(), json, log);
         } else {
           ok = ServerApi::sendMeasurement(json, log);
         }
@@ -82,7 +82,7 @@ extern "C" void sync_task_entry(void* arg) {
 
         bool ok = false;
         if (cm.active() && cm.active()->type() == CommType::Sim4G) {
-          ok = cm.active()->sendPayload(json, log);
+          ok = cm.active()->sendPayload(ServerApi::logUrl(), json, log);
         } else {
           ok = ServerApi::sendLog(json, log);
         }
@@ -92,6 +92,10 @@ extern "C" void sync_task_entry(void* arg) {
       }
 
       if (!did) vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    if (cm.active()) {
+      cm.active()->powerOff(log);
     }
 
     ESP_LOGI(TAG, "sync done meas=%d log=%d", sent_meas, sent_log);

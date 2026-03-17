@@ -1,7 +1,6 @@
 #pragma once
 #include "common/singleton.hpp"
 #include "modules/sensor/sensor.hpp"
-#include "common/nvs_store.hpp"
 #include "common/config.hpp"
 
 class SensorManager : public Singleton<SensorManager> {
@@ -13,8 +12,6 @@ public:
 private:
   SensorManager() = default;
 
-  ISensor* selectPreferred();
-  ISensor* other(ISensor* s);
-  void updateLastWorking(ISensor* s);
+  ISensor* selected();
   bool isValidDistance(int mm) const;
 };

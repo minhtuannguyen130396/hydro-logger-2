@@ -3,9 +3,12 @@
 #include "board/pins.hpp"
 
 void IoController::init() {
-  GpioDrv::initOutput(pins::LASER_PWR, false);
+  // Laser power is enabled by pulling the control line from HIGH to LOW.
+  GpioDrv::initOutput(pins::LASER_PWR, true);
   GpioDrv::initOutput(pins::ULTRA_PWR, false);
-  GpioDrv::initOutput(pins::SIM_PWR, false);
+  // SIM module stays off at idle and is enabled by driving the line HIGH->LOW.
+  GpioDrv::initOutput(pins::SIM_PWR, true);
+  // DCOM Wi-Fi module stays off at idle and is enabled by driving the line LOW->HIGH.
   GpioDrv::initOutput(pins::DCOM_PWR, false);
   GpioDrv::initOutput(pins::LED, false);
   GpioDrv::initOutput(pins::SPEAKER, false);

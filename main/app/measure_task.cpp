@@ -51,12 +51,13 @@ extern "C" void measure_task_entry(void* arg) {
 
       mm.valid = false;
       PublishApi::publishMeasurement(mm);
-      ESP_LOGW(TAG, "both sensors fail");
+      ESP_LOGW(TAG, "sensor warmup fail");
       continue;
     }
 
     int out[cfg::kDistanceSamples]{};
     bool ok = SensorManager::instance().read3(active, out, log);
+    active->finishMeasurement(log);
     if (!ok) {
       ctx->state.set(AppState::BIT_LAST_MEASURE_FAIL);
       mm.valid = false;

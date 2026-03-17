@@ -40,11 +40,14 @@ static constexpr int UART_SIM_BAUD         = 115200;
 static constexpr int UART_SENSOR_NUM       = 1;
 static constexpr int UART_SENSOR_TX        = GPIO_NUM_17;
 static constexpr int UART_SENSOR_RX        = GPIO_NUM_16;
-static constexpr int UART_SENSOR_BAUD      = 115200;
+static constexpr int UART_SENSOR_LASER_BAUD = 19200;
+static constexpr int UART_SENSOR_SUPERSONIC_BAUD = 115200;
 
 #if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+static constexpr int UART_SENSOR_BAUD = UART_SENSOR_LASER_BAUD;
 static constexpr gpio_num_t UART_SENSOR_PWR = LASER_PWR;
 #elif PINS_UART1_DEVICE == PINS_UART1_DEVICE_SUPERSONIC
+static constexpr int UART_SENSOR_BAUD = UART_SENSOR_SUPERSONIC_BAUD;
 static constexpr gpio_num_t UART_SENSOR_PWR = ULTRA_PWR;
 #else
 #error "PINS_UART1_DEVICE must be PINS_UART1_DEVICE_LASER or PINS_UART1_DEVICE_SUPERSONIC"

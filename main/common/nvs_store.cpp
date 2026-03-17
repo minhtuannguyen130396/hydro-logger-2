@@ -5,8 +5,8 @@
 
 static const char* TAG = "NvsStore";
 static const char* NS  = "wl";
-static const char* KEY_LAST_SENSOR = "last_sen";
 static const char* KEY_LAST_COMM   = "last_com";
+static const char* KEY_LAST_SIM_APN = "sim_apn";
 
 bool NvsStore::init() {
   esp_err_t err = nvs_flash_init();
@@ -34,16 +34,17 @@ static void set_u8(const char* key, uint8_t v) {
   nvs_close(h);
 }
 
-SensorType NvsStore::getLastWorkingSensor(SensorType def) {
-  return static_cast<SensorType>(get_u8(KEY_LAST_SENSOR, static_cast<uint8_t>(def)));
-}
-void NvsStore::setLastWorkingSensor(SensorType t) {
-  set_u8(KEY_LAST_SENSOR, static_cast<uint8_t>(t));
-}
-
 CommType NvsStore::getLastSuccessComm(CommType def) {
   return static_cast<CommType>(get_u8(KEY_LAST_COMM, static_cast<uint8_t>(def)));
 }
 void NvsStore::setLastSuccessComm(CommType t) {
   set_u8(KEY_LAST_COMM, static_cast<uint8_t>(t));
+}
+
+SimApnProfile NvsStore::getLastSimApn(SimApnProfile def) {
+  return static_cast<SimApnProfile>(get_u8(KEY_LAST_SIM_APN, static_cast<uint8_t>(def)));
+}
+
+void NvsStore::setLastSimApn(SimApnProfile profile) {
+  set_u8(KEY_LAST_SIM_APN, static_cast<uint8_t>(profile));
 }

@@ -1,10 +1,9 @@
 # State machines (high-level)
 
 ## SensorManager
-- TRY_PREFERRED -> (warmup ok) READY
-- TRY_PREFERRED -> (warmup fail) TRY_OTHER
-- TRY_OTHER -> (warmup ok) READY + update last_working_sensor
-- TRY_OTHER -> (warmup fail) BOTH_FAIL
+- BUILD_SELECTED -> WARMUP
+- WARMUP -> (warmup ok) READY
+- WARMUP -> (warmup fail) FAIL
 
 ## ConnectivityManager
 - SELECT_PREFERRED (from NVS) -> TRY_MODULE
