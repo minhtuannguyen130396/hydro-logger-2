@@ -4,7 +4,7 @@
 
 #include "app/app_state.hpp"
 #include "app/app_context.hpp"
-#include "modules/rtc/rtc_ds1307.hpp"
+#include "modules/rtc/rtc_pcf8563.hpp"
 #include "services/connectivity/connectivity_manager.hpp"
 #include "services/logging/log_service.hpp"
 #include "services/pack/json_packer.hpp"
@@ -27,7 +27,7 @@ extern "C" void sync_task_entry(void* arg) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     DateTime now{};
-    if (!RtcDs1307::instance().getTime(now)) {
+    if (!RtcPcf8563::instance().getTime(now)) {
       ESP_LOGW(TAG, "RTC read fail");
       continue;
     }

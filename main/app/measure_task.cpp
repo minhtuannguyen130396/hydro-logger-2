@@ -3,7 +3,7 @@
 #include "freertos/task.h"
 
 #include "modules/sensor/sensor_manager.hpp"
-#include "modules/rtc/rtc_ds1307.hpp"
+#include "modules/rtc/rtc_pcf8563.hpp"
 #include "services/logging/log_service.hpp"
 #include "middleware/publish_api.hpp"
 #include "board/adc_drv.hpp"
@@ -30,7 +30,7 @@ extern "C" void measure_task_entry(void* arg) {
     log.appendf("[Measure] start\n");
 
     DateTime now{};
-    RtcDs1307::instance().getTime(now);
+    RtcPcf8563::instance().getTime(now);
 
     MeasurementMsg mm{};
     mm.time = now;

@@ -42,7 +42,16 @@ static constexpr uint32_t kNotifyNormalMs = 1000;
 static constexpr uint32_t kNotifyUrgentMs = 500;
 
 // OTA
+static constexpr int kOtaMaxAttempts         = 3;   // max full download retries
+static constexpr uint32_t kOtaHttpTimeoutMs  = 15000;
+static constexpr const char* kCurrentFwVersion = "1.1.0"; // hardcoded current version
+
+#if defined(TEST_OTA)
+static constexpr const char* kFirmwareVersionUrl = "https://test.example.com/fw/version.json";
+static constexpr const char* kFirmwareBinUrl     = "https://test.example.com/fw/firmware.bin";
+#else 
 static constexpr const char* kFirmwareVersionUrl = "https://example.com/fw/version.json";
 static constexpr const char* kFirmwareBinUrl     = "https://example.com/fw/firmware.bin";
+#endif
 
 } // namespace cfg

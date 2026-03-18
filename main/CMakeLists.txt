@@ -24,12 +24,14 @@ idf_component_register(
     "modules/sensor/laser_sensor.cpp"
     "modules/sensor/ultrasonic_sensor.cpp"
     "modules/sensor/sensor_manager.cpp"
-    "modules/rtc/rtc_ds1307.cpp"
+    "modules/rtc/pcf8563.cpp"
+    "modules/rtc/rtc_pcf8563.cpp"
     "modules/io/io_controller.cpp"
 
     "board/gpio_drv.cpp"
     "board/uart_drv.cpp"
     "board/i2c_drv.cpp"
+    "board/i2c_port.cpp"
     "board/adc_drv.cpp"
 
     "common/nvs_store.cpp"
@@ -55,3 +57,9 @@ idf_component_register(
 
 # C++ standard
 target_compile_options(${COMPONENT_LIB} PRIVATE -std=gnu++17 -Wno-missing-field-initializers)
+
+# OTA build profiles: -DTEST_OTA or -DDEVELOP_OTA
+# Set via: idf.py build -DCMAKE_C_FLAGS="-DTEST_OTA" -DCMAKE_CXX_FLAGS="-DTEST_OTA"
+# Or uncomment one of the lines below:
+# target_compile_definitions(${COMPONENT_LIB} PRIVATE TEST_OTA)
+# target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVELOP_OTA)
