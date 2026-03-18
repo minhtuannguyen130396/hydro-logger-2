@@ -14,6 +14,9 @@
 #include "app/app_state.hpp"
 #include "app/app_context.hpp"
 
+// diagnostic (runs once at boot, then self-deletes)
+extern void diagnostic_run_blocking();
+
 // task entry functions
 extern "C" void scheduler_task_entry(void* arg);
 extern "C" void measure_task_entry(void* arg);
@@ -49,6 +52,10 @@ extern "C" void app_main(void) {
   g_ctx.bus.init();
   g_ctx.state.init();
   PublishApi::setBus(&g_ctx.bus);
+
+  // Boot diagnostic: test all modules, then wait kDiagnosticDelayMs
+  diagnostic_run_blocking();
+  ESP_LOGI(TAG, "diagnostic complete, starting main tasks");
 
   // Create tasks
   xTaskCreate(&measure_task_entry, "measure_task", 6144, &g_ctx, 6, nullptr);

@@ -6,6 +6,7 @@ idf_component_register(
     "app/sync_task.cpp"
     "app/notify_task.cpp"
     "app/ota_task.cpp"
+    "app/diagnostic_task.cpp"
 
     "middleware/message_bus.cpp"
     "middleware/publish_api.cpp"
