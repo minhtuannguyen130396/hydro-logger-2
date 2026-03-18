@@ -1,4 +1,5 @@
 #include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -7,7 +8,7 @@
 #include "middleware/publish_api.hpp"
 
 #include "modules/io/io_controller.hpp"
-#include "modules/rtc/rtc_ds1307.hpp"
+#include "modules/rtc/rtc_pcf8563.hpp"
 #include "board/adc_drv.hpp"
 
 #include "app/app_state.hpp"
@@ -27,11 +28,23 @@ static AppContext g_ctx;
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "boot");
 
+  // OTA rollback: mark current firmware as valid after successful boot.
+  // If a previous OTA update failed to boot, the bootloader will
+  // automatically rollback to the previous working firmware.
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t otaState;
+  if (esp_ota_get_state_partition(running, &otaState) == ESP_OK) {
+    if (otaState == ESP_OTA_IMG_PENDING_VERIFY) {
+      ESP_LOGI(TAG, "OTA: first boot after update, marking firmware valid");
+      esp_ota_mark_app_valid_cancel_rollback();
+    }
+  }
+
   NvsStore::init();
 
   IoController::instance().init();
   AdcDrv::init();
-  RtcDs1307::instance().init();
+  RtcPcf8563::instance().init();
 
   g_ctx.bus.init();
   g_ctx.state.init();

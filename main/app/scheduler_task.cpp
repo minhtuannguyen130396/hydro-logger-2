@@ -2,7 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "modules/rtc/rtc_ds1307.hpp"
+#include "modules/rtc/rtc_pcf8563.hpp"
 #include "common/time_utils.hpp"
 #include "common/config.hpp"
 #include "services/power/power_manager.hpp"
@@ -30,9 +30,9 @@ extern "C" void scheduler_task_entry(void* arg) {
   int last_trigger_minute = -1;
   while (true) {
     DateTime now{};
-    bool ok = RtcDs1307::instance().getTime(now);
+    bool ok = RtcPcf8563::instance().getTime(now);
     if (!ok) {
-      ESP_LOGW(TAG, "RTC read fail (check I2C/DS1307)");
+      ESP_LOGW(TAG, "RTC read fail (check I2C/PCF8563)");
       vTaskDelay(pdMS_TO_TICKS(1000));
       continue;
     }

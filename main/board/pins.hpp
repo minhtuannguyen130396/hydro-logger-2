@@ -58,5 +58,5 @@ static constexpr int I2C_NUM               = 0;
 static constexpr gpio_num_t I2C_SCL        = GPIO_NUM_22;
 static constexpr gpio_num_t I2C_SDA        = GPIO_NUM_21;
 static constexpr int I2C_FREQ_HZ           = 100000;
-static constexpr uint8_t DS1307_ADDR       = 0x68;
+static constexpr uint8_t PCF8563_ADDR      = 0x51;
 } // namespace pins
