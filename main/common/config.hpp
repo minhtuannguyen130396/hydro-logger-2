@@ -28,7 +28,7 @@ static constexpr const char* kSimApnViettel = "v-internet";
 static constexpr const char* kSimApnVinaphone = "m3-world";
 static constexpr uint32_t kDcomPowerEdgeDelayMs = 100;
 static constexpr const char* kDcomWifiSsid = "Minh Tuan";
-static constexpr const char* kDcomWifiPassword = "12345678";
+static constexpr const char* kDcomWifiPassword = "j12345678";
 
 // Queues
 static constexpr int kMeasureQueueLen = 10;
@@ -40,6 +40,12 @@ static constexpr int kSessionLogSize = 1024;
 // Notify
 static constexpr uint32_t kNotifyNormalMs = 1000;
 static constexpr uint32_t kNotifyUrgentMs = 500;
+
+// Device
+static constexpr const char* kDeviceSerial = "DEV001";
+
+// Diagnostic (boot-time self-test)
+static constexpr uint32_t kDiagnosticDelayMs = 10000; // delay after diagnostic before main tasks start
 
 // OTA
 static constexpr int kOtaMaxAttempts         = 3;   // max full download retries

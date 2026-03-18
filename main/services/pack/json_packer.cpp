@@ -1,4 +1,5 @@
 #include "services/pack/json_packer.hpp"
+#include "services/logging/log_buffer.hpp"
 #include "common/config.hpp"
 #include <cstdio>
 
@@ -48,5 +49,27 @@ std::string JsonPacker::packLog(const LogMsg& l) {
   }
   s += "\"";
   s += "}";
+  return s;
+}
+
+std::string JsonPacker::packSessionLog(const LogBuffer& log) {
+  std::string s;
+  s.reserve(256 + log.size());
+  s += "{\"device_id\":\"";
+  s += cfg::kDeviceSerial;
+  s += "\",\"fw\":\"";
+  s += cfg::kCurrentFwVersion;
+  s += "\",\"log\":\"";
+
+  const char* text = log.c_str();
+  int len = log.size();
+  for (int i = 0; i < len; ++i) {
+    char c = text[i];
+    if (c == '\\' || c == '"') { s += '\\'; s += c; }
+    else if (c == '\n') s += "\\n";
+    else if (c == '\r') s += "\\r";
+    else s += c;
+  }
+  s += "\"}";
   return s;
 }

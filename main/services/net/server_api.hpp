@@ -12,5 +12,7 @@ public:
 
   static bool sendMeasurement(const std::string& json, LogBuffer& log);
   static bool sendLog(const std::string& json, LogBuffer& log);
+  static bool sendSessionLog(const std::string& json, LogBuffer& log);
   static bool fetchFirmwareVersionJson(std::string& out, LogBuffer& log);
+  static const char* sessionLogUrl();
 };
