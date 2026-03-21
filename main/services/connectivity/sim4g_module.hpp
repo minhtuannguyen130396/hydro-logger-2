@@ -8,6 +8,7 @@ public:
   bool powerOn(LogBuffer& log) override;
   bool checkInternet(uint32_t timeoutMs, LogBuffer& log) override;
   bool sendPayload(const std::string& url, const std::string& json, LogBuffer& log) override;
+  bool httpGet(const std::string& url, std::string& response, LogBuffer& log);
   void powerOff(LogBuffer& log) override;
   CommType type() const override { return CommType::Sim4G; }
 
