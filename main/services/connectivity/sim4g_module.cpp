@@ -243,6 +243,79 @@ bool Sim4GModule::sendPayload(const std::string& url, const std::string& json, L
   return is2xx(result.status);
 }
 
+bool Sim4GModule::httpGet(const std::string& url, std::string& response, LogBuffer& log) {
+  if (!active_) {
+    log.appendf("[SIM] httpGet while module inactive\n");
+    return false;
+  }
+
+  std::string actionLine;
+  HttpActionResult result{};
+  char cmd[320];
+
+  (void)sendAtOk("AT+HTTPTERM", 1000, log);
+  if (!sendAtOk("AT+HTTPINIT", 2000, log)) return false;
+  if (!sendAtOk("AT+HTTPPARA=\"CID\",1", 1000, log)) return false;
+
+  std::snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"URL\",\"%s\"", url.c_str());
+  if (!sendAtOk(cmd, 2000, log)) return false;
+
+  // HTTP GET (method 0)
+  UartDrv::flushSim();
+  log.appendf("[SIM] AT>AT+HTTPACTION=0\n");
+  if (!UartDrv::writeLineSim("AT+HTTPACTION=0")) {
+    log.appendf("[SIM] uart write FAIL\n");
+    (void)sendAtOk("AT+HTTPTERM", 1000, log);
+    return false;
+  }
+  if (!waitForToken("OK", 2000, log)) {
+    (void)sendAtOk("AT+HTTPTERM", 1000, log);
+    return false;
+  }
+  if (!waitForToken("+HTTPACTION:", cfg::kSimHttpActionTimeoutMs, log, &actionLine) ||
+      !parseHttpActionLine(actionLine, result)) {
+    (void)sendAtOk("AT+HTTPTERM", 1000, log);
+    return false;
+  }
+
+  log.appendf("[SIM] HTTP GET status=%d body=%d\n", result.status, result.body_len);
+  if (!is2xx(result.status) || result.body_len <= 0) {
+    (void)sendAtOk("AT+HTTPTERM", 1000, log);
+    return false;
+  }
+
+  // Read response body
+  std::snprintf(cmd, sizeof(cmd), "AT+HTTPREAD=0,%d", result.body_len);
+  UartDrv::flushSim();
+  log.appendf("[SIM] AT>%s\n", cmd);
+  if (!UartDrv::writeLineSim(cmd)) {
+    (void)sendAtOk("AT+HTTPTERM", 1000, log);
+    return false;
+  }
+
+  // Wait for +HTTPREAD: <len> then read the body lines
+  if (!waitForToken("+HTTPREAD:", 5000, log)) {
+    (void)sendAtOk("AT+HTTPTERM", 1000, log);
+    return false;
+  }
+
+  // Next line(s) contain the response body, terminated by OK
+  response.clear();
+  uint32_t start = (uint32_t)xTaskGetTickCount();
+  while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < 5000) {
+    std::string line = UartDrv::readLineSim(500);
+    if (line.empty()) continue;
+    log.appendf("[SIM] <%s\n", line.c_str());
+    if (line.find("OK") != std::string::npos) break;
+    if (line.find("ERROR") != std::string::npos) break;
+    if (!response.empty()) response += '\n';
+    response += line;
+  }
+
+  (void)sendAtOk("AT+HTTPTERM", 1000, log);
+  return !response.empty();
+}
+
 void Sim4GModule::powerOff(LogBuffer& log) {
   if (active_) {
     (void)sendAtOk("AT+HTTPTERM", 1000, log);
