@@ -6,6 +6,7 @@
 #include "app/app_context.hpp"
 #include "modules/rtc/rtc_pcf8563.hpp"
 #include "services/connectivity/connectivity_manager.hpp"
+#include "services/connectivity/sim4g_module.hpp"
 #include "services/logging/log_service.hpp"
 #include "services/pack/json_packer.hpp"
 #include "services/net/server_api.hpp"
@@ -51,6 +52,43 @@ extern "C" void sync_task_entry(void* arg) {
 
     ctx->state.set(AppState::BIT_CONN_OK);
     ctx->state.clear(AppState::BIT_CONN_FAIL);
+
+    // Time sync: fetch server time, compare with RTC, update if delta > 60s
+    {
+      std::string timeStr;
+      bool fetched = false;
+
+      if (cm.active() && cm.active()->type() == CommType::Sim4G) {
+        fetched = static_cast<Sim4GModule*>(cm.active())->httpGet(
+            ServerApi::timeUrl(), timeStr, log);
+      } else {
+        fetched = ServerApi::fetchServerTime(timeStr, log);
+      }
+
+      if (fetched) {
+        DateTime serverTime{};
+        if (timeu::parseServerTime(timeStr.c_str(), serverTime)) {
+          DateTime rtcNow{};
+          RtcPcf8563::instance().getTime(rtcNow);
+          int64_t delta = timeu::deltaSeconds(serverTime, rtcNow);
+          log.appendf("[Sync] time delta=%llds\n", (long long)delta);
+
+          if (delta > 60) {
+            RtcPcf8563::instance().setTime(serverTime);
+            log.appendf("[Sync] RTC updated -> %04d-%02d-%02d %02d:%02d:%02d\n",
+                        serverTime.year, serverTime.month, serverTime.day,
+                        serverTime.hour, serverTime.minute, serverTime.second);
+            ESP_LOGI(TAG, "RTC synced delta=%llds", (long long)delta);
+          } else {
+            log.appendf("[Sync] RTC OK (delta <= 60s)\n");
+          }
+        } else {
+          log.appendf("[Sync] time parse FAIL: '%s'\n", timeStr.c_str());
+        }
+      } else {
+        log.appendf("[Sync] time fetch FAIL\n");
+      }
+    }
 
     // 1-minute send window
     uint32_t start = (uint32_t)xTaskGetTickCount();

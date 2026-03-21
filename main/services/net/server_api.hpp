@@ -15,4 +15,7 @@ public:
   static bool sendSessionLog(const std::string& json, LogBuffer& log);
   static bool fetchFirmwareVersionJson(std::string& out, LogBuffer& log);
   static const char* sessionLogUrl();
+
+  static const char* timeUrl();
+  static bool fetchServerTime(std::string& out, LogBuffer& log);
 };
