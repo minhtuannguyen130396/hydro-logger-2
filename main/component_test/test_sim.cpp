@@ -30,6 +30,7 @@ static void logRawResponse(const std::string& line) {
 }
 
 // Simple AT command sender for test mode
+// Reads all data until timeout, then checks the full response at once.
 static bool sendAt(const char* cmd, const char* expect, uint32_t timeoutMs) {
   UartDrv::flushSim();
   TEST_INFO(NAME, "AT> %s", cmd);
@@ -39,22 +40,22 @@ static bool sendAt(const char* cmd, const char* expect, uint32_t timeoutMs) {
     return false;
   }
 
-  uint32_t start = (uint32_t)xTaskGetTickCount();
-  while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < timeoutMs) {
-    std::string line = UartDrv::readLineSim(200);
-    if (line.empty()) continue;
+  std::string resp = UartDrv::readLineSim(timeoutMs);
+  logRawResponse(resp);
 
-    logRawResponse(line);
-
-    if (line.find(expect) != std::string::npos) {
-      return true;
-    }
-    if (line.find("ERROR") != std::string::npos) {
-      return false;
-    }
+  if (resp.empty()) {
+    TEST_INFO(NAME, "  timeout - no data received");
+    return false;
   }
 
-  TEST_INFO(NAME, "  timeout waiting for '%s'", expect);
+  if (resp.find(expect) != std::string::npos) {
+    return true;
+  }
+  if (resp.find("ERROR") != std::string::npos) {
+    return false;
+  }
+
+  TEST_INFO(NAME, "  '%s' not found in response", expect);
   return false;
 }
 
@@ -74,16 +75,14 @@ void test_sim() {
   testDelayMs(100);
   IoController::instance().setSimPower(false);
   TEST_INFO(NAME, "Wait boot 12000ms...");
-  testDelayMs(20000);
+  testDelayMs(12000);
 
-  // AT handshake at the configured baud with a longer timeout.
+  // AT handshake at 115200 baud: try AT + get phone number
   bool at_ok = false;
   for (int i = 0; i < 50; i++) {
-    if (sendAt("AT", "OK", 3000)) {
-      at_ok = true;
-      break;
-    }
-    testDelayMs(500);
+    if (sendAt("AT", "OK", 3000)) { at_ok = true; break; }
+    if (sendAt("AT+CNUM", "OK", 3000)) { at_ok = true; break; }
+    testDelayMs(2000);
   }
 
   if (!at_ok) {

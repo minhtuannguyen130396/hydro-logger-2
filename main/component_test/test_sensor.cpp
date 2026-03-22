@@ -124,66 +124,113 @@ void test_ultrasonic() {
   TEST_INFO(ULTRA_NAME, "Power ON");
   IoController::instance().setUltrasonicPower(true);
   TEST_INFO(ULTRA_NAME, "Wait warmup 2000ms...");
-  testDelayMs(2000);
+ 
+  // Read registers one by one: 0x0002..0x0006
+  struct RegInfo {
+    uint16_t addr;
+    const char* name;
+    bool isSigned;
+  };
+  static const RegInfo regs[] = {
+    {0x0001, "Current Level", false},
+    {0x0002, "Measure Range", false},
+    {0x0003, "Base Offset",   true },
+    {0x0004, "Baudrate",      false},
+    {0x0005, "Device ID",     false},
+  };
 
-  // Build Modbus read request: addr=0x01, func=0x03, start=0x0002, count=0x0005
-  uint8_t request[8];
-  request[0] = 0x01; // node address
-  request[1] = 0x03; // read holding registers
-  request[2] = 0x00; request[3] = 0x02; // start address
-  request[4] = 0x00; request[5] = 0x01; // register count
-  uint16_t crc = modbusCrc16(request, 6);
-  request[6] = (uint8_t)(crc & 0xFF);
-  request[7] = (uint8_t)(crc >> 8);
+  bool allOk = true;
+  while(1) {
+     testDelayMs(20000);
+    // Build Modbus request: func=0x03, read 1 register
+    uint8_t request[8];
+    request[0] = 0x01;
+    request[1] = 0x03;
+    request[2] = (uint8_t)(regs[0].addr >> 8);
+    request[3] = (uint8_t)(regs[0].addr & 0xFF);
+    request[4] = 0x00;
+    request[5] = 0x05;
+    uint16_t crc = modbusCrc16(request, 6);
+    request[6] = (uint8_t)(crc & 0xFF);
+    request[7] = (uint8_t)(crc >> 8);
 
-  // Send request
-  UartDrv::flushSensor();
-  TEST_INFO(ULTRA_NAME, "Sending Modbus read request...");
-  int written = UartDrv::writeSensor(request, sizeof(request));
-  if (written != sizeof(request)) {
-    TEST_FAIL(ULTRA_NAME, "UART write failed");
-    IoController::instance().setUltrasonicPower(false);
-    return;
-  }
+    // Print TX raw
+    char txHex[32]{};
+    for (int i = 0; i < 8; i++)
+      snprintf(txHex + i * 3, sizeof(txHex) - i * 3, "%02X ", request[i]);
+    TEST_INFO(ULTRA_NAME, "[%s] TX: %s", regs[0].name, txHex);
 
-  // Read response (expect 15 bytes)
-  testDelayMs(6000); // inter-frame delay
-  uint8_t response[32]{};
-  int rx = UartDrv::readSensor(response, sizeof(response), 6000);
+    // Send
+    UartDrv::flushSensor();
+    int written = UartDrv::writeSensor(request, sizeof(request));
+    if (written != sizeof(request)) {
+      TEST_INFO(ULTRA_NAME, "[%s] UART write failed", regs[0].name);
+      allOk = false;
+      continue;
+    }
 
-  if (rx >= 15) {
+    // Read response (expect 7 bytes: addr + func + byteCount + 2 data + 2 CRC)
+    testDelayMs(1000);
+    uint8_t response[32]{};
+    int rx = UartDrv::readSensor(response, sizeof(response), 3000);
+
+    // Print RX raw
+    char rxHex[96]{};
+    int pos = 0;
+    for (int i = 0; i < rx && pos < (int)sizeof(rxHex) - 4; i++)
+      pos += snprintf(rxHex + pos, sizeof(rxHex) - pos, "%02X ", response[i]);
+    TEST_INFO(ULTRA_NAME, "[%s] RX (%d bytes): %s", regs[0].name, rx, rxHex);
+
+    if (rx < 15) {
+      TEST_INFO(ULTRA_NAME, "Response too short: expected 15, got %d", rx);
+      allOk = false;
+      continue;
+    }
+
     // Verify CRC
     uint16_t expCrc = modbusCrc16(response, rx - 2);
     uint16_t gotCrc = (uint16_t)response[rx - 2] | ((uint16_t)response[rx - 1] << 8);
-
-    if (expCrc == gotCrc) {
-      uint16_t dist = ((uint16_t)response[3] << 8) | response[4];
-      uint16_t range = ((uint16_t)response[5] << 8) | response[6];
-      int16_t offset = (int16_t)(((uint16_t)response[7] << 8) | response[8]);
-      uint16_t baud = ((uint16_t)response[9] << 8) | response[10];
-      uint16_t node = ((uint16_t)response[11] << 8) | response[12];
-
-      TEST_INFO(ULTRA_NAME, "Distance: %u mm", (unsigned)dist);
-      TEST_INFO(ULTRA_NAME, "Range:    %u mm", (unsigned)range);
-      TEST_INFO(ULTRA_NAME, "Offset:   %d mm", (int)offset);
-      TEST_INFO(ULTRA_NAME, "Baudrate: %u", (unsigned)baud);
-      TEST_INFO(ULTRA_NAME, "Node:     %u", (unsigned)node);
-      TEST_PASS(ULTRA_NAME);
-    } else {
+    if (expCrc != gotCrc) {
       TEST_INFO(ULTRA_NAME, "CRC mismatch: expected=0x%04X got=0x%04X", expCrc, gotCrc);
-      TEST_FAIL(ULTRA_NAME, "CRC error");
+      allOk = false;
+      continue;
     }
+
+    // Parse all 5 registers from response
+    uint8_t byteCount = response[2];
+    TEST_INFO(ULTRA_NAME, "Byte count: %d (expected %d)", byteCount, 5 * 2);
+
+    for (int r = 0; r < 5; r++) {
+      uint8_t hi = response[3 + r * 2];
+      uint8_t lo = response[4 + r * 2];
+      uint16_t raw = ((uint16_t)hi << 8) | lo;
+
+      if (regs[r].isSigned) {
+        TEST_INFO(ULTRA_NAME, "[%s] raw=[%02X %02X] = %d (0x%04X)",
+                  regs[r].name, hi, lo, (int)(int16_t)raw, raw);
+      } else {
+        TEST_INFO(ULTRA_NAME, "[%s] raw=[%02X %02X] = %u (0x%04X)",
+                  regs[r].name, hi, lo, (unsigned)raw, raw);
+      }
+
+      // Extra decode for Current Level: try swapped bytes and sum of bytes
+      if (r == 0) {
+        uint16_t swapped = ((uint16_t)lo << 8) | hi;
+        uint16_t sum = (uint16_t)hi + (uint16_t)lo;
+        TEST_INFO(ULTRA_NAME, "[%s] swapped=[%02X %02X] = %u (0x%04X)",
+                  regs[r].name, lo, hi, (unsigned)swapped, swapped);
+        TEST_INFO(ULTRA_NAME, "[%s] byte1+byte2 = %u + %u = %u",
+                  regs[r].name, (unsigned)hi, (unsigned)lo, (unsigned)sum);
+      }
+    }
+
+    testDelayMs(1000); // gap between requests
   }
-  else {
-    TEST_INFO(ULTRA_NAME, "Response too short: %d bytes (expected 15)", rx);
-    if (rx > 0) {
-      char hexBuf[96]{};
-      int pos = 0;
-      for (int i = 0; i < rx && pos < (int)sizeof(hexBuf) - 4; i++)
-        pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", response[i]);
-      TEST_INFO(ULTRA_NAME, "RX data: %s", hexBuf);
-    }
-    TEST_FAIL(ULTRA_NAME, "No valid response - check sensor connection");
+
+  if (allOk) {
+    TEST_PASS(ULTRA_NAME);
+  } else {
+    TEST_FAIL(ULTRA_NAME, "One or more register reads failed");
   }
 
   // Power off

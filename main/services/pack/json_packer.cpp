@@ -1,6 +1,7 @@
 #include "services/pack/json_packer.hpp"
 #include "services/logging/log_buffer.hpp"
 #include "common/config.hpp"
+#include "common/nvs_store.hpp"
 #include <cstdio>
 
 static void append_datetime(std::string& s, const DateTime& t) {
@@ -52,11 +53,41 @@ std::string JsonPacker::packLog(const LogMsg& l) {
   return s;
 }
 
+std::string JsonPacker::packWaterLevel(const MeasurementMsg& m) {
+  // Required JSON format:
+  // { "water_lever_0":<int>, "water_lever_1":<int>, "water_lever_2":<int>,
+  //   "date_time":"YYYY-MM-DD HH:MM:SS", "serial_number":"TD_MW_00012",
+  //   "type":"water_lever", "vol":<int> }
+  std::string s;
+  s.reserve(256);
+  s += "{";
+  s += "\"water_lever_0\":"; s += std::to_string(m.dist_mm[0]); s += ",";
+  s += "\"water_lever_1\":"; s += std::to_string(m.dist_mm[1]); s += ",";
+  s += "\"water_lever_2\":"; s += std::to_string(m.dist_mm[2]); s += ",";
+
+  // date_time: "YYYY-MM-DD HH:MM:SS" (space-separated, not ISO T)
+  char dt[32];
+  std::snprintf(dt, sizeof(dt), "%04d-%02d-%02d %02d:%02d:%02d",
+                m.time.year, m.time.month, m.time.day,
+                m.time.hour, m.time.minute, m.time.second);
+  s += "\"date_time\":\""; s += dt; s += "\",";
+
+  char serial[20];
+  NvsStore::getDeviceSerial(serial, sizeof(serial));
+  s += "\"serial_number\":\""; s += serial; s += "\",";
+  s += "\"type\":\"water_lever\",";
+  s += "\"vol\":"; s += std::to_string(m.meta.voltage_mv);
+  s += "}";
+  return s;
+}
+
 std::string JsonPacker::packSessionLog(const LogBuffer& log) {
   std::string s;
   s.reserve(256 + log.size());
+  char sessSerial[20];
+  NvsStore::getDeviceSerial(sessSerial, sizeof(sessSerial));
   s += "{\"device_id\":\"";
-  s += cfg::kDeviceSerial;
+  s += sessSerial;
   s += "\",\"fw\":\"";
   s += cfg::kCurrentFwVersion;
   s += "\",\"log\":\"";

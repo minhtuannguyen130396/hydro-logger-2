@@ -28,7 +28,7 @@ extern void test_timesync();
 static const char* TAG = "TestMain";
 
 // ──────────────────────────────────────────────
-// UART0 line reader (blocking, with echo)
+// Console line reader using getchar/putchar (no UART driver needed)
 // ──────────────────────────────────────────────
 static bool readLine(char* buf, int maxLen, uint32_t timeoutMs) {
   int pos = 0;
@@ -39,15 +39,19 @@ static bool readLine(char* buf, int maxLen, uint32_t timeoutMs) {
       break;
     }
 
-    uint8_t ch = 0;
-    int n = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(100));
-    if (n <= 0) continue;
+    int ch = getchar();
+    if (ch == EOF) {
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
 
     // Echo
-    uart_write_bytes(UART_NUM_0, (const char*)&ch, 1);
+    putchar(ch);
+    fflush(stdout);
 
     if (ch == '\r' || ch == '\n') {
-      uart_write_bytes(UART_NUM_0, "\n", 1);
+      putchar('\n');
+      fflush(stdout);
       break;
     }
 
@@ -55,7 +59,8 @@ static bool readLine(char* buf, int maxLen, uint32_t timeoutMs) {
     if (ch == 0x08 || ch == 0x7F) {
       if (pos > 0) {
         pos--;
-        uart_write_bytes(UART_NUM_0, "\b \b", 3);
+        printf("\b \b");
+        fflush(stdout);
       }
       continue;
     }
@@ -152,16 +157,8 @@ static void dispatchCommand(const char* cmd) {
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== COMPONENT TEST MODE ===");
 
-  // Install UART0 driver for command input
-  uart_config_t uart0_cfg{};
-  uart0_cfg.baud_rate = 115200;
-  uart0_cfg.data_bits = UART_DATA_8_BITS;
-  uart0_cfg.parity = UART_PARITY_DISABLE;
-  uart0_cfg.stop_bits = UART_STOP_BITS_1;
-  uart0_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-
-  uart_driver_install(UART_NUM_0, 2048, 0, 0, nullptr, 0);
-  uart_param_config(UART_NUM_0, &uart0_cfg);
+  // UART0 is already configured by ESP-IDF console — no driver install needed.
+  // readLine() uses getchar()/putchar() via VFS.
 
   // Init basic peripherals (all power OFF by default)
   NvsStore::init();
@@ -177,11 +174,10 @@ extern "C" void app_main(void) {
   char cmdBuf[64];
   while (true) {
     printf("> ");
-    // fflush(stdout);
-    test_ultrasonic();
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    // if (readLine(cmdBuf, sizeof(cmdBuf), 0)) {
-    //   dispatchCommand(cmdBuf);
-    // }
+    fflush(stdout);
+
+    if (readLine(cmdBuf, sizeof(cmdBuf), 0)) {
+      dispatchCommand(cmdBuf);
+    }
   }
 }

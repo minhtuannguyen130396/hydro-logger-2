@@ -21,6 +21,7 @@ idf_component_register(
     "services/logging/log_service.cpp"
     "services/power/power_manager.cpp"
     "services/ota/ota_service.cpp"
+    "services/portal/boot_portal.cpp"
 
     "modules/sensor/laser_sensor.cpp"
     "modules/sensor/ultrasonic_sensor.cpp"
@@ -48,6 +49,7 @@ idf_component_register(
     "services/logging"
     "services/power"
     "services/ota"
+    "services/portal"
     "modules"
     "modules/sensor"
     "modules/rtc"

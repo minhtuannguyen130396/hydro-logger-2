@@ -36,3 +36,12 @@ bool ServerApi::fetchServerTime(std::string& out, LogBuffer& log) {
   log.appendf("[API] get server time\n");
   return HttpClient::getText(timeUrl(), out, 8000);
 }
+
+const char* ServerApi::waterLevelUrl() {
+  return "http://donuoctrieuduong.xyz/dev_test/water_lever.php";
+}
+
+bool ServerApi::sendWaterLevel(const std::string& json, LogBuffer& log) {
+  log.appendf("[API] sendWaterLevel\n");
+  return HttpClient::postJson(waterLevelUrl(), json, 8000);
+}

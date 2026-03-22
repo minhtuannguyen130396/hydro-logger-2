@@ -101,15 +101,19 @@ extern "C" void sync_task_entry(void* arg) {
 
       if (ctx->bus.popMeasurement(mm, cfg::kQueuePopTimeoutMs)) {
         mm.meta.voltage_mv = AdcDrv::readMilliVolts();
-        std::string json = JsonPacker::packMeasurement(mm);
+
+        // Pack into water_lever JSON format for Trieu Duong API
+        std::string json = JsonPacker::packWaterLevel(mm);
+        ESP_LOGI(TAG, "water_level payload: %s", json.c_str());
+        log.appendf("[Sync] TX water_level: %s\n", json.c_str());
 
         bool ok = false;
         if (cm.active() && cm.active()->type() == CommType::Sim4G) {
-          ok = cm.active()->sendPayload(ServerApi::measurementUrl(), json, log);
+          ok = cm.active()->sendPayload(ServerApi::waterLevelUrl(), json, log);
         } else {
-          ok = ServerApi::sendMeasurement(json, log);
+          ok = ServerApi::sendWaterLevel(json, log);
         }
-        log.appendf("[Sync] meas send=%d\n", (int)ok);
+        log.appendf("[Sync] water_level send=%d\n", (int)ok);
         sent_meas += ok ? 1 : 0;
         did = true;
       }

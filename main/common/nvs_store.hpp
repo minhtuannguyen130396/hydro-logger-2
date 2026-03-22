@@ -8,9 +8,29 @@ class NvsStore {
 public:
   static bool init();
 
+  // Connectivity preferences
   static CommType getLastSuccessComm(CommType def = CommType::Sim4G);
   static void setLastSuccessComm(CommType t);
 
-  static SimApnProfile getLastSimApn(SimApnProfile def = SimApnProfile::Viettel);
+  static SimApnProfile getLastSimApn(SimApnProfile def = SimApnProfile::Vinaphone);
   static void setLastSimApn(SimApnProfile profile);
+
+  // --- Device calibration / config (portal-configurable) ---
+
+  // Device code: numeric part of serial (e.g. 100 -> "TD_MW_00100")
+  static uint16_t getDeviceCode(uint16_t def = 12);
+  static void setDeviceCode(uint16_t code);
+
+  // Build serial string from stored code. Writes into `out`, max `maxLen` bytes.
+  // Returns pointer to `out` for convenience.
+  static const char* getDeviceSerial(char* out, int maxLen);
+
+  // Water-level offset in mm.  final = measured - offset
+  static int32_t getWaterLevelOffset(int32_t def = 0);
+  static void setWaterLevelOffset(int32_t offset);
+
+  // Voltage calibration factor K stored as K*1000 (fixed-point).
+  // final_mV = measured_mV * K.  Default K=1.000 -> stored as 1000.
+  static uint32_t getVoltageK(uint32_t def = 1000);
+  static void setVoltageK(uint32_t k_x1000);
 };

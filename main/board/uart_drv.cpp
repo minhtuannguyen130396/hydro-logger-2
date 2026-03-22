@@ -30,6 +30,10 @@ bool UartDrv::initSimUart() {
   return initUart((uart_port_t)pins::UART_SIM_NUM, pins::UART_SIM_TX, pins::UART_SIM_RX, pins::UART_SIM_BAUD);
 }
 
+bool UartDrv::initSimUart(int baud) {
+  return initUart((uart_port_t)pins::UART_SIM_NUM, pins::UART_SIM_TX, pins::UART_SIM_RX, baud);
+}
+
 bool UartDrv::initSensorUart() {
   return initUart((uart_port_t)pins::UART_SENSOR_NUM, pins::UART_SENSOR_TX, pins::UART_SENSOR_RX, pins::UART_SENSOR_BAUD);
 }
@@ -61,7 +65,7 @@ void UartDrv::flushSensor() {
 bool UartDrv::writeLineSim(const char* line) {
   if (!line) return false;
   uart_write_bytes((uart_port_t)pins::UART_SIM_NUM, line, (int)strlen(line));
-  uart_write_bytes((uart_port_t)pins::UART_SIM_NUM, "\r\n", 2);
+  uart_write_bytes((uart_port_t)pins::UART_SIM_NUM, "\r", 1);
   return true;
 }
 
@@ -72,8 +76,7 @@ std::string UartDrv::readLineSim(uint32_t timeoutMs) {
   while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < timeoutMs) {
     int n = readSim(&ch, 1, 50);
     if (n == 1) {
-      if (ch == '\n') break;
-      if (ch != '\r') s.push_back((char)ch);
+      s.push_back((char)ch);
     }
   }
   return s;

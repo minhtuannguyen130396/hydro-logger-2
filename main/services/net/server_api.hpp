@@ -18,4 +18,8 @@ public:
 
   static const char* timeUrl();
   static bool fetchServerTime(std::string& out, LogBuffer& log);
+
+  // Water-level POST endpoint (Trieu Duong API)
+  static const char* waterLevelUrl();
+  static bool sendWaterLevel(const std::string& json, LogBuffer& log);
 };
