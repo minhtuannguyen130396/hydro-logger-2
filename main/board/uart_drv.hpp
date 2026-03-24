@@ -5,6 +5,7 @@
 class UartDrv {
 public:
   static bool initSimUart();
+  static bool initSimUart(int baud);
   static bool initSensorUart();
   static int writeSim(const uint8_t* data, int len);
   static int writeSensor(const uint8_t* data, int len);

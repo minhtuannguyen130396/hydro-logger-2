@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "common/config.hpp"
+#include "services/net/http_client.hpp"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -11,6 +12,8 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "modules/io/io_controller.hpp"
+
+static const char* TAG = "DCOM";
 
 namespace {
 
@@ -160,9 +163,18 @@ bool DcomModule::checkInternet(uint32_t timeoutMs, LogBuffer& log) {
 }
 
 bool DcomModule::sendPayload(const std::string& url, const std::string& json, LogBuffer& log) {
-  log.appendf("[DCOM] sendPayload url=%s bytes=%d via esp_http_client\n", url.c_str(), (int)json.size());
-  (void)json;
-  return true;
+  ESP_LOGI(TAG, "[HTTP:POST] url=%s bytes=%d", url.c_str(), (int)json.size());
+  log.appendf("[DCOM] POST url=%s bytes=%d\n", url.c_str(), (int)json.size());
+
+  bool ok = HttpClient::postJson(url, json, 8000);
+  if (ok) {
+    ESP_LOGI(TAG, "[HTTP:POST] OK");
+    log.appendf("[DCOM] POST OK\n");
+  } else {
+    ESP_LOGW(TAG, "[HTTP:POST] FAIL");
+    log.appendf("[DCOM] POST FAIL\n");
+  }
+  return ok;
 }
 
 void DcomModule::powerOff(LogBuffer& log) {

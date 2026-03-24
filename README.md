@@ -11,7 +11,8 @@ ESP32-based water level monitoring system with dual connectivity (4G SIM + Wi-Fi
 - **Dual sensor support** — Laser or Ultrasonic sensor, selected at compile time
 - **Dual connectivity** — SIM 4G (AT commands over UART) and Wi-Fi DCOM with automatic failover
 - **OTA updates** — Over-the-air firmware updates via `esp_https_ota` with rollback support
-- **Scheduled operation** — Measures every 10 minutes, syncs to server every hour
+- **Scheduled operation** — Measures every 10 minutes, syncs to server every hour (single connectivity session)
+- **Retry with timeout** — Time sync and OTA version check retry on failure (20s window, 2s interval)
 - **Boot diagnostics** — Self-test of all modules (RTC, ADC, sensors, connectivity) at power-on
 - **Power management** — Safe mode disables peripherals between scheduled windows
 - **Persistent preferences** — Last successful connectivity module saved to NVS
@@ -21,7 +22,7 @@ ESP32-based water level monitoring system with dual connectivity (4G SIM + Wi-Fi
 ```
 +-------------------------------------------------------------+
 |                        Application                          |
-|  Scheduler | Measure | Sync | Notify | OTA | Diagnostic    |
+|  Scheduler | Measure | Sync (+ OTA) | Notify | Diagnostic   |
 +-------------------------------------------------------------+
 |                        Middleware                           |
 |              MessageBus  |  PublishApi (queues)             |
@@ -52,15 +53,15 @@ Boot
  |     |
  |     |-- Every 10 min (00,10,20,30,40,50)
  |     |     |-> Measure Task (priority 6)
- |     |     |     |-> Warmup sensor -> Read 3 samples -> Publish to queue
- |     |     |
- |     |     |-> OTA Task (priority 4) ── check version, download if newer
+ |     |           |-> Warmup sensor -> Read 3 samples -> Publish to queue
  |     |
  |     |-- Every 60 min (minute == 0)
- |     |     |-> Sync Task (priority 5)
- |     |           |-> Warmup connectivity (SIM/DCOM failover)
+ |     |     |-> Sync Task (priority 5) ── single connectivity session
+ |     |           |-> Warmup connectivity (SIM/DCOM failover) ── single powerOn
+ |     |           |-> Time sync (20s retry window, 2s interval on fail)
  |     |           |-> Send queued measurements + logs (1-min window)
- |     |           |-> Power off module
+ |     |           |-> OTA version check (20s retry, DCOM only)
+ |     |           |-> Power off module ── single powerOff
  |     |
  |     |-- Outside schedule -> Safe mode (peripherals off)
  |
@@ -148,6 +149,8 @@ Key parameters in [`main/common/config.hpp`](main/common/config.hpp):
 | `kMaxRepeatRead` | 5 | Max retries per sample |
 | `kConnCheckTimeoutMs` | 60000 | Connectivity check timeout |
 | `kSyncWindowMs` | 60000 | Data send window duration |
+| `kFetchTimeoutMs` | 20000 | Time sync / OTA fetch retry window |
+| `kFetchRetryDelayMs` | 2000 | Delay between fetch retries |
 | `kOtaMaxAttempts` | 3 | Max OTA download retries |
 | `kCurrentFwVersion` | "1.1.0" | Current firmware version |
 
@@ -159,9 +162,9 @@ main/
 │   ├── app_main.cpp        # Entry point, boot sequence
 │   ├── scheduler_task.cpp  # Time-based task scheduler
 │   ├── measure_task.cpp    # Sensor reading & data publish
-│   ├── sync_task.cpp       # Server communication
+│   ├── sync_task.cpp       # Server sync + time sync + OTA check (single session)
 │   ├── notify_task.cpp     # LED & speaker control
-│   ├── ota_task.cpp        # Firmware update
+│   ├── ota_task.cpp        # Stub (OTA merged into sync_task)
 │   └── diagnostic_task.cpp # Boot-time self-test
 ├── middleware/             # Message queues & pub/sub
 ├── services/

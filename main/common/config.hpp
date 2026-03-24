@@ -19,9 +19,11 @@ static constexpr uint32_t kConnCheckTimeoutMs = 60000;
 static constexpr uint32_t kSyncWindowMs = 60000;
 static constexpr uint32_t kQueuePopTimeoutMs = 200;
 static constexpr uint32_t kSimPowerEdgeDelayMs = 100;
-static constexpr uint32_t kSimBootDelayMs = 12000;
+static constexpr uint32_t kSimBootDelayMs = 10000;
+static constexpr uint32_t kSimAtHandshakeTimeoutMs = 12000;
 static constexpr uint32_t kSimAtRetryDelayMs = 500;
-static constexpr uint32_t kSimApnTryTimeoutMs = 12000;
+static constexpr uint32_t kSimNetworkTimeoutMs = 40000;  // total budget for phase 3 (network readiness)
+static constexpr uint32_t kSimRegPollIntervalMs = 2000;  // poll interval for CEREG/CGATT
 static constexpr uint32_t kSimHttpDataTimeoutMs = 10000;
 static constexpr uint32_t kSimHttpActionTimeoutMs = 30000;
 static constexpr const char* kSimApnViettel = "v-internet";
@@ -41,11 +43,18 @@ static constexpr int kSessionLogSize = 1024;
 static constexpr uint32_t kNotifyNormalMs = 1000;
 static constexpr uint32_t kNotifyUrgentMs = 500;
 
-// Device
-static constexpr const char* kDeviceSerial = "DEV001";
+// Device — compile-time default; runtime serial loaded from NVS
+static constexpr const char* kDeviceSerialPrefix = "TD_MW_";
+static constexpr uint16_t kDefaultDeviceCode = 12;
 
 // Diagnostic (boot-time self-test)
-static constexpr uint32_t kDiagnosticDelayMs = 10000; // delay after diagnostic before main tasks start
+static constexpr uint32_t kDiagnosticDelayMs = 10000;
+
+// Boot config portal (Wi-Fi AP + HTTP)
+static constexpr const char* kPortalApSsid   = "TRAM_DO_NUOC";
+static constexpr uint32_t kPortalInactivityTimeoutMs = 120000;  // 2 minutes
+static constexpr uint32_t kDiagTimeFetchIntervalMs   = 10000;   // 10 seconds
+static constexpr uint32_t kDiagTimeFetchWindowMs     = 120000;  // 2 minutes total
 
 // OTA
 static constexpr int kOtaMaxAttempts         = 3;   // max full download retries

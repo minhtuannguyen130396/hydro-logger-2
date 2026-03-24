@@ -25,8 +25,8 @@ static constexpr gpio_num_t SPEAKER        = GPIO_NUM_NC;
 
 // UART2 for SIM module
 static constexpr int UART_SIM_NUM          = 2;
-static constexpr int UART_SIM_TX           = GPIO_NUM_5;
-static constexpr int UART_SIM_RX           = GPIO_NUM_18;
+static constexpr int UART_SIM_TX           = GPIO_NUM_18;
+static constexpr int UART_SIM_RX           = GPIO_NUM_19;
 static constexpr int UART_SIM_BAUD         = 115200;
 
 // UART1 shared by laser and supersonic sensor.
@@ -34,14 +34,24 @@ static constexpr int UART_SIM_BAUD         = 115200;
 #define PINS_UART1_DEVICE_LASER 1
 #define PINS_UART1_DEVICE_SUPERSONIC 2
 #ifndef PINS_UART1_DEVICE
-#define PINS_UART1_DEVICE PINS_UART1_DEVICE_LASER
+#define PINS_UART1_DEVICE PINS_UART1_DEVICE_SUPERSONIC
 #endif
 
 static constexpr int UART_SENSOR_NUM       = 1;
-static constexpr int UART_SENSOR_TX        = GPIO_NUM_17;
-static constexpr int UART_SENSOR_RX        = GPIO_NUM_16;
+
+#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+static constexpr int UART_SENSOR_TX        = GPIO_NUM_16;
+static constexpr int UART_SENSOR_RX        = GPIO_NUM_17;
+#elif PINS_UART1_DEVICE == PINS_UART1_DEVICE_SUPERSONIC
+static constexpr int UART_SENSOR_TX        = GPIO_NUM_16;
+static constexpr int UART_SENSOR_RX        = GPIO_NUM_17;
+#else
+#error "PINS_UART1_DEVICE must be PINS_UART1_DEVICE_LASER or PINS_UART1_DEVICE_SUPERSONIC"
+#endif
+
+
 static constexpr int UART_SENSOR_LASER_BAUD = 19200;
-static constexpr int UART_SENSOR_SUPERSONIC_BAUD = 115200;
+static constexpr int UART_SENSOR_SUPERSONIC_BAUD = 9600;
 
 #if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
 static constexpr int UART_SENSOR_BAUD = UART_SENSOR_LASER_BAUD;
