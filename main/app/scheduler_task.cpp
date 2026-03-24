@@ -44,13 +44,10 @@ extern "C" void scheduler_task_entry(void* arg) {
       pm.exitSafeMode();
       notify(g_measure_h);
 
-      if (timeu::isSyncMinute(now.minute)) {
-        ESP_LOGI(TAG, "minute==0 -> trigger sync");
-        notify(g_sync_h);
-      }
-
-      // OTA check after measure+sync in same 10-min cycle
-      notify(g_ota_h);
+      // DEBUG: always trigger sync every 10-min cycle (sync includes OTA check)
+      // REVERT: wrap in if(timeu::isSyncMinute(now.minute)) for production
+      ESP_LOGI(TAG, "DEBUG: trigger sync at %02d:%02d", now.hour, now.minute);
+      notify(g_sync_h);
     }
 
     if (!scheduled) {

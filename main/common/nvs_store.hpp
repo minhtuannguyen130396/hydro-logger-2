@@ -33,4 +33,15 @@ public:
   // final_mV = measured_mV * K.  Default K=1.000 -> stored as 1000.
   static uint32_t getVoltageK(uint32_t def = 1000);
   static void setVoltageK(uint32_t k_x1000);
+
+  // Batch save portal config (single NVS open/commit/close)
+  struct PortalConfig {
+    bool     save_code;
+    uint16_t dev_code;
+    bool     save_offset;
+    int32_t  wl_offset;
+    bool     save_k;
+    uint32_t vol_k;
+  };
+  static bool savePortalConfig(const PortalConfig& cfg);
 };

@@ -24,6 +24,7 @@ extern void test_dcom();
 extern void test_gpio();
 extern void test_i2c_scan();
 extern void test_timesync();
+extern void test_post_api();
 
 static const char* TAG = "TestMain";
 
@@ -96,6 +97,7 @@ static void printMenu() {
   printf("  test gpio       - Test GPIO outputs\n");
   printf("  test i2c        - Test I2C bus scan\n");
   printf("  test timesync   - Sync RTC from server time\n");
+  printf("  test postapi    - POST water_level to server\n");
   printf("  test all        - Run all tests\n");
   printf("  reboot          - Restart ESP32\n");
   printf("==========================================\n");
@@ -125,6 +127,8 @@ static void dispatchCommand(const char* cmd) {
     test_i2c_scan();
   } else if (strcmp(cmd, "test timesync") == 0) {
     test_timesync();
+  } else if (strcmp(cmd, "test postapi") == 0) {
+    test_post_api();
   } else if (strcmp(cmd, "test all") == 0) {
     printf("\n===== RUNNING ALL TESTS =====\n");
     test_rtc();
@@ -136,6 +140,7 @@ static void dispatchCommand(const char* cmd) {
     test_sim();
     test_dcom();
     test_timesync();
+    test_post_api();
     printf("===== ALL TESTS COMPLETE =====\n\n");
   } else if (strcmp(cmd, "reboot") == 0) {
     printf("Rebooting...\n");

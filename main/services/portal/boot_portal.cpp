@@ -31,6 +31,11 @@ static bool           s_active       = false;
 static TickType_t     s_last_request = 0;
 static PortalDiagResult s_diag{};
 
+// Cached readings from last /api/status call (used by /api/config)
+static int  s_cached_wl_raw  = 0;
+static int  s_cached_adc_mv  = 0;
+static bool s_cache_valid    = false;
+
 // ============================================================
 // JSON helper: extract int value from "key": <number>
 // ============================================================
@@ -73,25 +78,35 @@ h2{text-align:center;color:#2c3e50}
 .lbl{font-weight:600;color:#555}
 .val{color:#222}
 .ok{color:#27ae60}.fail{color:#e74c3c}
+.err-box{background:#e74c3c;color:#fff;padding:12px;border-radius:8px;text-align:center;margin:12px 0;display:none}
+.err-box button{background:#fff;color:#e74c3c;margin-top:8px}
 input[type=number]{width:120px;padding:6px;border:1px solid #ccc;border-radius:4px}
 label{display:block;margin:10px 0}
-button{padding:10px 24px;margin:6px 4px;border:none;border-radius:6px;cursor:pointer;font-size:14px}
+button{padding:10px 24px;margin:6px 4px;border:none;border-radius:6px;cursor:pointer;font-size:14px;position:relative}
 .btn-reload{background:#3498db;color:#fff}
 .btn-save{background:#27ae60;color:#fff}
 .btn-reload:hover{background:#2980b9}
 .btn-save:hover{background:#219a52}
+button:disabled{opacity:.6;cursor:not-allowed}
+.spin::after{content:'';display:inline-block;width:14px;height:14px;margin-left:8px;border:2px solid #fff;border-top:2px solid transparent;border-radius:50%;animation:sp .6s linear infinite;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
 #msg{margin:10px 0;padding:10px;border-radius:4px;display:none}
 </style></head>
 <body>
 <h2>TRAM DO NUOC</h2>
 
-<div class="card" id="st">
+<div class="card">
+ <h3 style="margin-top:0">Measured Values</h3>
+ <div class="row"><span class="lbl">Water Level (sensor)</span><span class="val" id="wlr">---</span></div>
+ <div class="row"><span class="lbl">Water Level (calibrated)</span><span class="val" id="wlc">---</span></div>
+ <div class="row"><span class="lbl">Voltage (ADC)</span><span class="val" id="vr">---</span></div>
+ <div class="row"><span class="lbl">Voltage (calibrated)</span><span class="val" id="vc">---</span></div>
+</div>
+
+<div class="card">
+ <h3 style="margin-top:0">Device Info</h3>
  <div class="row"><span class="lbl">Serial</span><span class="val" id="serial">---</span></div>
  <div class="row"><span class="lbl">Sensor</span><span class="val" id="sensor">---</span></div>
- <div class="row"><span class="lbl">Water Level (raw)</span><span class="val" id="wlr">---</span></div>
- <div class="row"><span class="lbl">Water Level (cal)</span><span class="val" id="wlc">---</span></div>
- <div class="row"><span class="lbl">Voltage (raw)</span><span class="val" id="vr">---</span></div>
- <div class="row"><span class="lbl">Voltage (cal)</span><span class="val" id="vc">---</span></div>
  <div class="row"><span class="lbl">RTC Time</span><span class="val" id="rtc">---</span></div>
  <div class="row"><span class="lbl">Wi-Fi</span><span class="val" id="wifi">---</span></div>
  <div class="row"><span class="lbl">SIM</span><span class="val" id="sim">---</span></div>
@@ -99,14 +114,15 @@ button{padding:10px 24px;margin:6px 4px;border:none;border-radius:6px;cursor:poi
  <div class="row"><span class="lbl">Saved K</span><span class="val" id="kf">---</span></div>
 </div>
 
-<button class="btn-reload" onclick="reload()">Reload</button>
+<div class="err-box" id="errBox"><span id="errTxt"></span><br><button onclick="location.reload()">Retry</button></div>
+<button class="btn-reload spin" id="btnR" disabled onclick="reload()">Loading</button>
 
 <div class="card">
- <h3 style="margin-top:0">Configuration</h3>
- <label>Device Code (digits):<br><input type="number" id="dc" min="0" max="99999" placeholder="e.g. 100"></label>
- <label>Current Water Level (mm):<br><input type="number" id="uwl" placeholder="real-world value"></label>
- <label>Current Voltage (mV):<br><input type="number" id="uv" placeholder="multimeter value"></label>
- <button class="btn-save" onclick="save()">Save</button>
+ <h3 style="margin-top:0">Calibration</h3>
+ <label>Device Code (digits):<br><input type="number" id="dc" min="0" max="65535" placeholder="e.g. 100"></label>
+ <label>Real Water Level (mm):<br><small>Enter the actual water level measured on-site</small><br><input type="number" id="uwl" placeholder="actual mm"></label>
+ <label>Real Voltage (mV):<br><small>Enter the actual voltage from multimeter</small><br><input type="number" id="uv" placeholder="actual mV"></label>
+ <button class="btn-save" id="btnS" onclick="save()">Save &amp; Compute</button>
 </div>
 
 <div id="msg"></div>
@@ -115,8 +131,20 @@ button{padding:10px 24px;margin:6px 4px;border:none;border-radius:6px;cursor:poi
 function c(id){return document.getElementById(id)}
 function cls(s){return s.indexOf('OK')>=0?'ok':'fail'}
 
-function reload(){
- fetch('/api/status').then(r=>r.json()).then(d=>{
+function btnOn(b,t){b.disabled=true;b.dataset.txt=b.textContent;b.textContent=t;b.classList.add('spin')}
+function btnOff(b){b.disabled=false;b.textContent=b.dataset.txt;b.classList.remove('spin')}
+
+function showErr(msg){
+ c('btnR').style.display='none';
+ c('errTxt').textContent=msg;
+ c('errBox').style.display='block';
+}
+
+function loadData(){
+ fetch('/api/status').then(r=>{
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+ }).then(d=>{
   c('serial').textContent=d.serial;
   c('sensor').textContent=d.sensor_ok?d.sensor:'FAIL';
   c('wlr').textContent=d.wl_raw+' mm';
@@ -129,26 +157,34 @@ function reload(){
   c('off').textContent=d.offset+' mm';
   c('kf').textContent=d.k_str;
   c('dc').value=d.dev_code;
-  c('uwl').value=d.wl_raw;
-  c('uv').value=d.vol_raw;
- }).catch(e=>{showMsg('Fetch error: '+e,'#e74c3c')});
+  var b=c('btnR');b.textContent='Reload';b.classList.remove('spin');b.disabled=false;
+ }).catch(e=>{
+  showErr('Connection failed: '+e.message);
+ });
+}
+
+function reload(){
+ var b=c('btnR');btnOn(b,'Reloading');
+ location.reload();
 }
 
 function save(){
+ var b=c('btnS');btnOn(b,'Saving');
+ var dv=c('dc').value,wl=c('uwl').value,vl=c('uv').value;
  var body=JSON.stringify({
-  device_code:parseInt(c('dc').value)||0,
-  user_water_level:parseInt(c('uwl').value)||0,
-  user_voltage:parseInt(c('uv').value)||0
+  device_code:dv!==''?parseInt(dv):-1,
+  user_water_level:wl!==''?parseInt(wl):0,
+  user_voltage:vl!==''?parseInt(vl):0
  });
  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:body})
   .then(r=>r.json()).then(d=>{
-   showMsg(d.ok?'Saved! offset='+d.offset+' K='+d.k_str:'Error','#27ae60');
-   reload();
-  }).catch(e=>{showMsg('Error: '+e,'#e74c3c')});
+   if(!d.ok){btnOff(b);showMsg('Error: '+(d.error||'calibration failed'),'#e74c3c')}
+   else{location.reload()}
+  }).catch(e=>{btnOff(b);showMsg('Error: '+e,'#e74c3c')});
 }
 
 function showMsg(t,bg){var m=c('msg');m.textContent=t;m.style.display='block';m.style.background=bg;m.style.color='#fff';setTimeout(()=>{m.style.display='none'},4000)}
-reload();
+loadData();
 </script>
 </body></html>
 )rawliteral";
@@ -188,6 +224,11 @@ static esp_err_t handle_status(httpd_req_t* req) {
 
   // ADC: read local voltage
   int adc_mv = AdcDrv::readMilliVolts();
+
+  // Cache readings for /api/config to use (avoids re-reading sensor)
+  s_cached_wl_raw = wl_raw;
+  s_cached_adc_mv = adc_mv;
+  s_cache_valid   = sensor_ok;
 
   // NVS: load saved calibration
   uint16_t dev_code    = NvsStore::getDeviceCode();
@@ -238,53 +279,87 @@ static esp_err_t handle_config(httpd_req_t* req) {
   BootPortal::touch();
   ESP_LOGI(TAG, "POST /api/config");
 
-  // Read request body
-  char body[256]{};
-  int len = httpd_req_recv(req, body, sizeof(body) - 1);
-  if (len <= 0) {
-    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+  // Read request body — validate content_len and read fully
+  size_t content_len = req->content_len;
+  if (content_len == 0 || content_len >= 256) {
+    ESP_LOGW(TAG, "bad content_len=%u", (unsigned)content_len);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body length");
     return ESP_FAIL;
   }
-  body[len] = '\0';
-  ESP_LOGI(TAG, "config body: %s", body);
+
+  char body[256]{};
+  int total_read = 0;
+  while (total_read < (int)content_len) {
+    int n = httpd_req_recv(req, body + total_read,
+                           content_len - (size_t)total_read);
+    if (n <= 0) {
+      ESP_LOGW(TAG, "recv fail after %d/%u bytes", total_read, (unsigned)content_len);
+      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Incomplete body");
+      return ESP_FAIL;
+    }
+    total_read += n;
+  }
+  body[total_read] = '\0';
+  ESP_LOGI(TAG, "config body (%d bytes): %s", total_read, body);
 
   int dev_code  = json_int(body, "device_code", -1);
   int user_wl   = json_int(body, "user_water_level", 0);
   int user_vol  = json_int(body, "user_voltage", 0);
 
-  // --- Save device code ---
-  if (dev_code >= 0 && dev_code <= 99999) {
-    NvsStore::setDeviceCode((uint16_t)dev_code);
-    ESP_LOGI(TAG, "device_code -> %d", dev_code);
+  // Track what succeeded/failed for honest response
+  bool code_saved   = false;
+  bool offset_saved = false;
+  bool k_saved      = false;
+  const char* error_msg = nullptr;
+
+  // Use cached sensor/ADC values from last /api/status (no blocking re-read)
+  int32_t  offset  = NvsStore::getWaterLevelOffset();
+  uint32_t k_x1000 = NvsStore::getVoltageK();
+
+  // --- Validate device code (uint16_t range: 0..65535) ---
+  if (dev_code >= 0 && dev_code <= 65535) {
+    code_saved = true;
+  } else if (dev_code > 65535) {
+    ESP_LOGW(TAG, "device_code %d exceeds uint16 max", dev_code);
+    error_msg = "device_code must be 0-65535";
   }
 
-  // --- Compute & save water-level offset ---
-  int32_t offset = NvsStore::getWaterLevelOffset();
+  // --- Compute water-level offset from cached sensor reading ---
   if (user_wl > 0) {
-    // Read current sensor value
-    LogBuffer log = LogService::createSessionLog();
-    SensorManager& sm = SensorManager::instance();
-    ISensor* sensor = nullptr;
-    int measured = 0;
-    if (sm.ensureReady(sensor, log) && sensor->readDistanceMm(measured, log)) {
-      offset = (int32_t)(measured - user_wl);
-      NvsStore::setWaterLevelOffset(offset);
-      ESP_LOGI(TAG, "wl_offset: measured=%d - user=%d = %d", measured, user_wl, (int)offset);
+    if (s_cache_valid && s_cached_wl_raw > 0) {
+      offset = (int32_t)(s_cached_wl_raw - user_wl);
+      ESP_LOGI(TAG, "wl_offset: cached=%d - user=%d = %d", s_cached_wl_raw, user_wl, (int)offset);
+      offset_saved = true;
     } else {
-      ESP_LOGW(TAG, "sensor read FAIL, cannot compute offset");
+      ESP_LOGW(TAG, "no valid cached sensor reading for offset");
+      error_msg = "Reload status first, then save";
     }
   }
 
-  // --- Compute & save voltage K ---
-  uint32_t k_x1000 = NvsStore::getVoltageK();
+  // --- Compute voltage K from cached ADC reading ---
   if (user_vol > 0) {
-    int adc_mv = AdcDrv::readMilliVolts();
-    if (adc_mv > 0) {
-      k_x1000 = (uint32_t)((int64_t)user_vol * 1000 / adc_mv);
-      NvsStore::setVoltageK(k_x1000);
-      ESP_LOGI(TAG, "vol_k: user=%d / measured=%d = %u (x1000)", user_vol, adc_mv, (unsigned)k_x1000);
+    if (s_cached_adc_mv > 0) {
+      k_x1000 = (uint32_t)((int64_t)user_vol * 1000 / s_cached_adc_mv);
+      ESP_LOGI(TAG, "vol_k: user=%d / cached=%d = %u (x1000)", user_vol, s_cached_adc_mv, (unsigned)k_x1000);
+      k_saved = true;
     } else {
-      ESP_LOGW(TAG, "ADC read 0, cannot compute K");
+      ESP_LOGW(TAG, "no valid cached ADC reading for K");
+      error_msg = "Reload status first, then save";
+    }
+  }
+
+  // --- Batch NVS write (single open/commit/close) ---
+  if (code_saved || offset_saved || k_saved) {
+    NvsStore::PortalConfig pcfg{};
+    pcfg.save_code   = code_saved;
+    pcfg.dev_code    = (uint16_t)dev_code;
+    pcfg.save_offset = offset_saved;
+    pcfg.wl_offset   = offset;
+    pcfg.save_k      = k_saved;
+    pcfg.vol_k       = k_x1000;
+    if (!NvsStore::savePortalConfig(pcfg)) {
+      error_msg = "NVS write failed";
+      code_saved = offset_saved = k_saved = false;
     }
   }
 
@@ -293,10 +368,22 @@ static esp_err_t handle_config(httpd_req_t* req) {
   std::snprintf(k_str, sizeof(k_str), "%u.%03u",
                 (unsigned)(k_x1000 / 1000), (unsigned)(k_x1000 % 1000));
 
-  // Response
-  char resp[128];
+  // Response — report actual result honestly
+  bool any_fail = (user_wl > 0 && !offset_saved) || (user_vol > 0 && !k_saved)
+               || (dev_code > 65535);
+  char resp[256];
   std::snprintf(resp, sizeof(resp),
-    "{\"ok\":true,\"offset\":%d,\"k_str\":\"%s\"}", (int)offset, k_str);
+    "{\"ok\":%s,\"offset\":%d,\"k_str\":\"%s\","
+    "\"code_saved\":%s,\"offset_saved\":%s,\"k_saved\":%s%s%s%s}",
+    any_fail ? "false" : "true",
+    (int)offset, k_str,
+    code_saved   ? "true" : "false",
+    offset_saved ? "true" : "false",
+    k_saved      ? "true" : "false",
+    error_msg ? ",\"error\":\"" : "",
+    error_msg ? error_msg : "",
+    error_msg ? "\"" : ""
+  );
 
   httpd_resp_set_type(req, "application/json");
   httpd_resp_sendstr(req, resp);
@@ -376,7 +463,7 @@ static void stop_wifi_ap() {
 // ============================================================
 static bool start_http_server() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.stack_size     = 8192;    // larger stack for sensor reads
+  config.stack_size     = 12288;   // larger stack for sensor reads + NVS
   config.max_uri_handlers = 4;
 
   esp_err_t err = httpd_start(&s_httpd, &config);
@@ -405,9 +492,16 @@ static bool start_http_server() {
     .user_ctx = nullptr
   };
 
-  httpd_register_uri_handler(s_httpd, &uri_root);
-  httpd_register_uri_handler(s_httpd, &uri_status);
-  httpd_register_uri_handler(s_httpd, &uri_config);
+  esp_err_t r1 = httpd_register_uri_handler(s_httpd, &uri_root);
+  esp_err_t r2 = httpd_register_uri_handler(s_httpd, &uri_status);
+  esp_err_t r3 = httpd_register_uri_handler(s_httpd, &uri_config);
+  if (r1 != ESP_OK || r2 != ESP_OK || r3 != ESP_OK) {
+    ESP_LOGE(TAG, "URI register fail: root=%s status=%s config=%s",
+             esp_err_to_name(r1), esp_err_to_name(r2), esp_err_to_name(r3));
+    httpd_stop(s_httpd);
+    s_httpd = nullptr;
+    return false;
+  }
 
   ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);
   return true;

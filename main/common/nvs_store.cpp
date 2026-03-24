@@ -150,3 +150,34 @@ void NvsStore::setVoltageK(uint32_t k_x1000) {
   set_u32(KEY_VOL_K, k_x1000);
   ESP_LOGI(TAG, "saved voltage_k=%u (x1000)", (unsigned)k_x1000);
 }
+
+// ============================================================
+// Batch save portal config (single open/commit/close)
+// ============================================================
+bool NvsStore::savePortalConfig(const PortalConfig& cfg) {
+  nvs_handle_t h{};
+  if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+    ESP_LOGE(TAG, "batch open fail");
+    return false;
+  }
+  if (cfg.save_code) {
+    nvs_set_u16(h, KEY_DEV_CODE, cfg.dev_code);
+    ESP_LOGI(TAG, "batch: device_code=%u", (unsigned)cfg.dev_code);
+  }
+  if (cfg.save_offset) {
+    nvs_set_i32(h, KEY_WL_OFFSET, cfg.wl_offset);
+    ESP_LOGI(TAG, "batch: wl_offset=%d", (int)cfg.wl_offset);
+  }
+  if (cfg.save_k) {
+    nvs_set_u32(h, KEY_VOL_K, cfg.vol_k);
+    ESP_LOGI(TAG, "batch: vol_k=%u", (unsigned)cfg.vol_k);
+  }
+  esp_err_t err = nvs_commit(h);
+  nvs_close(h);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "batch commit fail: %s", esp_err_to_name(err));
+    return false;
+  }
+  ESP_LOGI(TAG, "batch commit OK");
+  return true;
+}
