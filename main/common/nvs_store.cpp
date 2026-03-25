@@ -125,7 +125,7 @@ void NvsStore::setDeviceCode(uint16_t code) {
 
 const char* NvsStore::getDeviceSerial(char* out, int maxLen) {
   uint16_t code = getDeviceCode(cfg::kDefaultDeviceCode);
-  std::snprintf(out, maxLen, "%s%05u", cfg::kDeviceSerialPrefix, (unsigned)code);
+  std::snprintf(out, maxLen, "%s%04u", cfg::kDeviceSerialPrefix, (unsigned)code);
   return out;
 }
 

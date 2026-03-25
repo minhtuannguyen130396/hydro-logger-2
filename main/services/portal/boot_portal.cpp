@@ -97,8 +97,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
 <div class="card">
  <h3 style="margin-top:0">Measured Values</h3>
- <div class="row"><span class="lbl">Water Level (sensor)</span><span class="val" id="wlr">---</span></div>
- <div class="row"><span class="lbl">Water Level (calibrated)</span><span class="val" id="wlc">---</span></div>
+ <div class="row"><span class="lbl">Water Level</span><span class="val" id="wlr">---</span></div>
  <div class="row"><span class="lbl">Voltage (ADC)</span><span class="val" id="vr">---</span></div>
  <div class="row"><span class="lbl">Voltage (calibrated)</span><span class="val" id="vc">---</span></div>
 </div>
@@ -110,7 +109,6 @@ button:disabled{opacity:.6;cursor:not-allowed}
  <div class="row"><span class="lbl">RTC Time</span><span class="val" id="rtc">---</span></div>
  <div class="row"><span class="lbl">Wi-Fi</span><span class="val" id="wifi">---</span></div>
  <div class="row"><span class="lbl">SIM</span><span class="val" id="sim">---</span></div>
- <div class="row"><span class="lbl">Saved Offset</span><span class="val" id="off">---</span></div>
  <div class="row"><span class="lbl">Saved K</span><span class="val" id="kf">---</span></div>
 </div>
 
@@ -120,7 +118,6 @@ button:disabled{opacity:.6;cursor:not-allowed}
 <div class="card">
  <h3 style="margin-top:0">Calibration</h3>
  <label>Device Code (digits):<br><input type="number" id="dc" min="0" max="65535" placeholder="e.g. 100"></label>
- <label>Real Water Level (mm):<br><small>Enter the actual water level measured on-site</small><br><input type="number" id="uwl" placeholder="actual mm"></label>
  <label>Real Voltage (mV):<br><small>Enter the actual voltage from multimeter</small><br><input type="number" id="uv" placeholder="actual mV"></label>
  <button class="btn-save" id="btnS" onclick="save()">Save &amp; Compute</button>
 </div>
@@ -148,13 +145,11 @@ function loadData(){
   c('serial').textContent=d.serial;
   c('sensor').textContent=d.sensor_ok?d.sensor:'FAIL';
   c('wlr').textContent=d.wl_raw+' mm';
-  c('wlc').textContent=d.wl_cal+' mm';
   c('vr').textContent=d.vol_raw+' mV';
   c('vc').textContent=d.vol_cal+' mV';
   c('rtc').textContent=d.rtc;
   c('wifi').innerHTML='<span class="'+cls(d.wifi)+'">'+d.wifi+'</span>';
   c('sim').innerHTML='<span class="'+cls(d.sim)+'">'+d.sim+'</span>';
-  c('off').textContent=d.offset+' mm';
   c('kf').textContent=d.k_str;
   c('dc').value=d.dev_code;
   var b=c('btnR');b.textContent='Reload';b.classList.remove('spin');b.disabled=false;
@@ -170,10 +165,9 @@ function reload(){
 
 function save(){
  var b=c('btnS');btnOn(b,'Saving');
- var dv=c('dc').value,wl=c('uwl').value,vl=c('uv').value;
+ var dv=c('dc').value,vl=c('uv').value;
  var body=JSON.stringify({
   device_code:dv!==''?parseInt(dv):-1,
-  user_water_level:wl!==''?parseInt(wl):0,
   user_voltage:vl!==''?parseInt(vl):0
  });
  fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:body})
@@ -232,14 +226,13 @@ static esp_err_t handle_status(httpd_req_t* req) {
 
   // NVS: load saved calibration
   uint16_t dev_code    = NvsStore::getDeviceCode();
-  int32_t  offset      = NvsStore::getWaterLevelOffset();
   uint32_t k_x1000     = NvsStore::getVoltageK();
 
   char serial[20];
   NvsStore::getDeviceSerial(serial, sizeof(serial));
 
   // Compute calibrated values
-  int wl_cal  = wl_raw - (int)offset;
+  int wl_cal  = wl_raw;
   int vol_cal = (int)((int64_t)adc_mv * (int64_t)k_x1000 / 1000);
 
   // K as string "1.234"
@@ -257,14 +250,14 @@ static esp_err_t handle_status(httpd_req_t* req) {
     "\"vol_raw\":%d,\"vol_cal\":%d,"
     "\"rtc\":\"%04d-%02d-%02d %02d:%02d:%02d\","
     "\"wifi\":\"%s\",\"sim\":\"%s\","
-    "\"offset\":%d,\"k_str\":\"%s\"}",
+    "\"k_str\":\"%s\"}",
     serial, (unsigned)dev_code,
     sensor_name, sensor_ok ? "true" : "false",
     wl_raw, wl_cal,
     adc_mv, vol_cal,
     now.year, now.month, now.day, now.hour, now.minute, now.second,
     wifi_status_str(), sim_status_str(),
-    (int)offset, k_str
+    k_str
   );
 
   httpd_resp_set_type(req, "application/json");
@@ -303,17 +296,14 @@ static esp_err_t handle_config(httpd_req_t* req) {
   ESP_LOGI(TAG, "config body (%d bytes): %s", total_read, body);
 
   int dev_code  = json_int(body, "device_code", -1);
-  int user_wl   = json_int(body, "user_water_level", 0);
   int user_vol  = json_int(body, "user_voltage", 0);
 
   // Track what succeeded/failed for honest response
   bool code_saved   = false;
-  bool offset_saved = false;
   bool k_saved      = false;
   const char* error_msg = nullptr;
 
   // Use cached sensor/ADC values from last /api/status (no blocking re-read)
-  int32_t  offset  = NvsStore::getWaterLevelOffset();
   uint32_t k_x1000 = NvsStore::getVoltageK();
 
   // --- Validate device code (uint16_t range: 0..65535) ---
@@ -322,18 +312,6 @@ static esp_err_t handle_config(httpd_req_t* req) {
   } else if (dev_code > 65535) {
     ESP_LOGW(TAG, "device_code %d exceeds uint16 max", dev_code);
     error_msg = "device_code must be 0-65535";
-  }
-
-  // --- Compute water-level offset from cached sensor reading ---
-  if (user_wl > 0) {
-    if (s_cache_valid && s_cached_wl_raw > 0) {
-      offset = (int32_t)(s_cached_wl_raw - user_wl);
-      ESP_LOGI(TAG, "wl_offset: cached=%d - user=%d = %d", s_cached_wl_raw, user_wl, (int)offset);
-      offset_saved = true;
-    } else {
-      ESP_LOGW(TAG, "no valid cached sensor reading for offset");
-      error_msg = "Reload status first, then save";
-    }
   }
 
   // --- Compute voltage K from cached ADC reading ---
@@ -349,17 +327,17 @@ static esp_err_t handle_config(httpd_req_t* req) {
   }
 
   // --- Batch NVS write (single open/commit/close) ---
-  if (code_saved || offset_saved || k_saved) {
+  if (code_saved || k_saved) {
     NvsStore::PortalConfig pcfg{};
     pcfg.save_code   = code_saved;
     pcfg.dev_code    = (uint16_t)dev_code;
-    pcfg.save_offset = offset_saved;
-    pcfg.wl_offset   = offset;
+    pcfg.save_offset = false;
+    pcfg.wl_offset   = 0;
     pcfg.save_k      = k_saved;
     pcfg.vol_k       = k_x1000;
     if (!NvsStore::savePortalConfig(pcfg)) {
       error_msg = "NVS write failed";
-      code_saved = offset_saved = k_saved = false;
+      code_saved = k_saved = false;
     }
   }
 
@@ -369,17 +347,15 @@ static esp_err_t handle_config(httpd_req_t* req) {
                 (unsigned)(k_x1000 / 1000), (unsigned)(k_x1000 % 1000));
 
   // Response — report actual result honestly
-  bool any_fail = (user_wl > 0 && !offset_saved) || (user_vol > 0 && !k_saved)
-               || (dev_code > 65535);
+  bool any_fail = (user_vol > 0 && !k_saved) || (dev_code > 65535);
   char resp[256];
   std::snprintf(resp, sizeof(resp),
-    "{\"ok\":%s,\"offset\":%d,\"k_str\":\"%s\","
-    "\"code_saved\":%s,\"offset_saved\":%s,\"k_saved\":%s%s%s%s}",
+    "{\"ok\":%s,\"k_str\":\"%s\","
+    "\"code_saved\":%s,\"k_saved\":%s%s%s%s}",
     any_fail ? "false" : "true",
-    (int)offset, k_str,
-    code_saved   ? "true" : "false",
-    offset_saved ? "true" : "false",
-    k_saved      ? "true" : "false",
+    k_str,
+    code_saved ? "true" : "false",
+    k_saved    ? "true" : "false",
     error_msg ? ",\"error\":\"" : "",
     error_msg ? error_msg : "",
     error_msg ? "\"" : ""

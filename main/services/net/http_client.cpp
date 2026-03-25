@@ -1,4 +1,7 @@
 #include "services/net/http_client.hpp"
+
+#include <inttypes.h>
+
 #include "esp_http_client.h"
 #include "esp_log.h"
 
@@ -30,34 +33,36 @@ bool HttpClient::postJson(const std::string& url, const std::string& json, uint3
   return is2xx(code);
 }
 
+static esp_err_t getEventHandler(esp_http_client_event_t* evt) {
+  std::string* out = static_cast<std::string*>(evt->user_data);
+  if (evt->event_id == HTTP_EVENT_ON_DATA && out && evt->data_len > 0) {
+    out->append(static_cast<const char*>(evt->data), evt->data_len);
+  }
+  return ESP_OK;
+}
+
 bool HttpClient::getText(const std::string& url, std::string& out, uint32_t timeoutMs) {
   out.clear();
   esp_http_client_config_t cfg{};
   cfg.url = url.c_str();
   cfg.timeout_ms = (int)timeoutMs;
+  cfg.event_handler = getEventHandler;
+  cfg.user_data = &out;
 
   esp_http_client_handle_t c = esp_http_client_init(&cfg);
   if (!c) return false;
 
   esp_http_client_set_method(c, HTTP_METHOD_GET);
+  esp_http_client_set_header(c, "Cache-Control", "no-cache");
+
   esp_err_t err = esp_http_client_perform(c);
   int code = esp_http_client_get_status_code(c);
+  esp_http_client_cleanup(c);
 
-  if (err != ESP_OK || !is2xx(code)) {
-    ESP_LOGW(TAG, "GET failed err=%s code=%d", esp_err_to_name(err), code);
-    esp_http_client_cleanup(c);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "GET failed: %s", esp_err_to_name(err));
     return false;
   }
-
-  int len = esp_http_client_get_content_length(c);
-  if (len < 0) len = 1024;
-  out.reserve((size_t)len);
-
-  char buf[256];
-  int r = 0;
-  while ((r = esp_http_client_read(c, buf, sizeof(buf))) > 0) {
-    out.append(buf, buf + r);
-  }
-  esp_http_client_cleanup(c);
-  return true;
+  ESP_LOGI(TAG, "GET code=%d len=%d", code, (int)out.size());
+  return is2xx(code);
 }

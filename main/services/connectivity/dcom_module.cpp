@@ -25,17 +25,43 @@ esp_netif_t* s_sta_netif = nullptr;
 bool s_netif_ready = false;
 bool s_handlers_ready = false;
 
+bool isFatalDisconnectReason(uint8_t reason) {
+  switch (reason) {
+    case WIFI_REASON_NO_AP_FOUND:
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_ASSOC_FAIL:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_CONNECTION_FAIL:
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+      return true;
+    default:
+      return false;
+  }
+}
+
 void wifiEventHandler(void*,
                       esp_event_base_t event_base,
                       int32_t event_id,
-                      void*) {
+                      void* event_data) {
   if (!s_wifi_events) return;
 
   if (event_base == WIFI_EVENT) {
     if (event_id == WIFI_EVENT_STA_START) {
       esp_wifi_connect();
     } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
-      esp_wifi_connect();
+      xEventGroupClearBits(s_wifi_events, kWifiConnectedBit);
+
+      auto* disconnected = static_cast<wifi_event_sta_disconnected_t*>(event_data);
+      const uint8_t reason = disconnected ? disconnected->reason : 0;
+      ESP_LOGW(TAG, "Wi-Fi disconnected, reason=%u", (unsigned)reason);
+
+      if (isFatalDisconnectReason(reason)) {
+        xEventGroupSetBits(s_wifi_events, kWifiFailBit);
+      } else {
+        esp_wifi_connect();
+      }
     }
   } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
     xEventGroupSetBits(s_wifi_events, kWifiConnectedBit);
@@ -104,6 +130,8 @@ bool DcomModule::powerOn(LogBuffer& log) {
   IoController::instance().setDcomPower(false);
   vTaskDelay(pdMS_TO_TICKS(cfg::kDcomPowerEdgeDelayMs));
   IoController::instance().setDcomPower(true);
+  log.appendf("[DCOM] wait boot %dms\n", (int)cfg::kDcomBootDelayMs);
+  vTaskDelay(pdMS_TO_TICKS(cfg::kDcomBootDelayMs));
   return true;
 }
 
@@ -152,13 +180,23 @@ bool DcomModule::checkInternet(uint32_t timeoutMs, LogBuffer& log) {
   log.appendf("[DCOM] wait Wi-Fi ssid=%s timeout=%dms\n", cfg::kDcomWifiSsid, (int)timeoutMs);
   EventBits_t bits = xEventGroupWaitBits(
       s_wifi_events,
-      kWifiConnectedBit,
+      kWifiConnectedBit | kWifiFailBit,
       pdTRUE,
       pdFALSE,
       pdMS_TO_TICKS(timeoutMs));
 
   const bool connected = (bits & kWifiConnectedBit) != 0;
+  const bool failed = (bits & kWifiFailBit) != 0;
   log.appendf("[DCOM] wifi connected=%d\n", (int)connected);
+  if (failed) {
+    log.appendf("[DCOM] wifi connect FAIL (fatal disconnect)\n");
+  } else if (!connected) {
+    log.appendf("[DCOM] wifi connect TIMEOUT\n");
+  }
+  if (connected) {
+    log.appendf("[DCOM] wifi stabilize delay 5s\n");
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
   return connected;
 }
 

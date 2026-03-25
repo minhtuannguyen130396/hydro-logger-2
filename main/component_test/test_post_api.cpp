@@ -19,11 +19,11 @@ static const char* NAME = "POST_API";
 static const char* kWaterLevelUrl = "http://donuoctrieuduong.xyz/dev_test/water_lever.php";
 
 // Default test payload
-static const char* kDefaultSerial = "TD_MW_00012";
-static constexpr int kDefaultWaterLevel0 = 15230;
-static constexpr int kDefaultWaterLevel1 = 15228;
-static constexpr int kDefaultWaterLevel2 = 15231;
-static constexpr int kDefaultVoltage     = 4850;
+static const char* kDefaultSerial = "TD_MW_0100";
+static constexpr int kDefaultWaterLevel0 = 0;
+static constexpr int kDefaultWaterLevel1 = 0;
+static constexpr int kDefaultWaterLevel2 = 0;
+static constexpr int kDefaultVoltage     = 0;
 
 // ──────────────────────────────────────────────
 // Build JSON payload

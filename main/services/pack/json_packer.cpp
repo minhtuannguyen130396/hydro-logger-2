@@ -56,7 +56,7 @@ std::string JsonPacker::packLog(const LogMsg& l) {
 std::string JsonPacker::packWaterLevel(const MeasurementMsg& m) {
   // Required JSON format:
   // { "water_lever_0":<int>, "water_lever_1":<int>, "water_lever_2":<int>,
-  //   "date_time":"YYYY-MM-DD HH:MM:SS", "serial_number":"TD_MW_00012",
+  //   "date_time":"YYYY-MM-DD HH:MM:SS", "serial_number":"TD_MW_0100",
   //   "type":"water_lever", "vol":<int> }
   std::string s;
   s.reserve(256);

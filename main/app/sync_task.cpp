@@ -181,6 +181,12 @@ extern "C" void sync_task_entry(void* arg) {
         bool did = false;
 
         if (ctx->bus.popMeasurement(mm, cfg::kQueuePopTimeoutMs)) {
+          if (!mm.valid) {
+            log.appendf("[Sync] skip invalid measurement d=[%d,%d,%d]\n",
+                        mm.dist_mm[0], mm.dist_mm[1], mm.dist_mm[2]);
+            did = true;
+            continue;
+          }
           mm.meta.voltage_mv = AdcDrv::readMilliVolts();
 
           std::string json = JsonPacker::packWaterLevel(mm);

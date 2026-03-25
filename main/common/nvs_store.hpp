@@ -17,8 +17,8 @@ public:
 
   // --- Device calibration / config (portal-configurable) ---
 
-  // Device code: numeric part of serial (e.g. 100 -> "TD_MW_00100")
-  static uint16_t getDeviceCode(uint16_t def = 12);
+  // Device code: numeric part of serial (e.g. 100 -> "TD_MW_0100")
+  static uint16_t getDeviceCode(uint16_t def = 100);
   static void setDeviceCode(uint16_t code);
 
   // Build serial string from stored code. Writes into `out`, max `maxLen` bytes.

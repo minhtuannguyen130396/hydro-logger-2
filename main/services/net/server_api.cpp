@@ -2,9 +2,9 @@
 #include "services/net/http_client.hpp"
 #include "common/config.hpp"
 
-const char* ServerApi::measurementUrl() { return "https://example.com/api/measure"; }
-const char* ServerApi::logUrl()         { return "https://example.com/api/log"; }
-const char* ServerApi::sessionLogUrl()  { return "https://example.com/api/session-log"; }
+const char* ServerApi::measurementUrl() { return "http://example.com/api/measure"; }
+const char* ServerApi::logUrl()         { return "http://donuoctrieuduong.xyz/hydro-logger-api/post_logger.php"; }
+const char* ServerApi::sessionLogUrl()  { return "http://example.com/api/session-log"; }
 const char* ServerApi::fwVersionUrl()   { return cfg::kFirmwareVersionUrl; }
 const char* ServerApi::fwBinUrl()       { return cfg::kFirmwareBinUrl; }
 
