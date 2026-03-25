@@ -147,8 +147,6 @@ extern "C" void sync_task_entry(void* arg) {
       ESP_LOGW(TAG, "RTC read fail");
       continue;
     }
-    // DEBUG: skip isSyncMinute check -> always post every 10-min cycle
-    ESP_LOGI(TAG, "DEBUG: sync at minute=%d (always-post mode)", now.minute);
 
     ctx->state.set(AppState::BIT_SYNC_RUNNING);
     LogBuffer log = LogService::createSessionLog();
@@ -181,6 +179,12 @@ extern "C" void sync_task_entry(void* arg) {
         bool did = false;
 
         if (ctx->bus.popMeasurement(mm, cfg::kQueuePopTimeoutMs)) {
+          if (!mm.valid) {
+            log.appendf("[Sync] skip invalid measurement d=[%d,%d,%d]\n",
+                        mm.dist_mm[0], mm.dist_mm[1], mm.dist_mm[2]);
+            did = true;
+            continue;
+          }
           mm.meta.voltage_mv = AdcDrv::readMilliVolts();
 
           std::string json = JsonPacker::packWaterLevel(mm);

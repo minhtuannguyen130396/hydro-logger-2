@@ -58,13 +58,13 @@ extern "C" void measure_task_entry(void* arg) {
     int out[cfg::kDistanceSamples]{};
     bool ok = SensorManager::instance().read3(active, out, log);
     active->finishMeasurement(log);
+    for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
     if (!ok) {
       ctx->state.set(AppState::BIT_LAST_MEASURE_FAIL);
       mm.valid = false;
     } else {
       ctx->state.clear(AppState::BIT_LAST_MEASURE_FAIL);
       mm.valid = true;
-      for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
     }
 
     // publish measurement

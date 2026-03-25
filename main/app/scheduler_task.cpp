@@ -44,10 +44,9 @@ extern "C" void scheduler_task_entry(void* arg) {
       pm.exitSafeMode();
       notify(g_measure_h);
 
-      // DEBUG: always trigger sync every 10-min cycle (sync includes OTA check)
-      // REVERT: wrap in if(timeu::isSyncMinute(now.minute)) for production
-      ESP_LOGI(TAG, "DEBUG: trigger sync at %02d:%02d", now.hour, now.minute);
-      notify(g_sync_h);
+      if (timeu::isSyncMinute(now.minute)) {
+        notify(g_sync_h);
+      }
     }
 
     if (!scheduled) {

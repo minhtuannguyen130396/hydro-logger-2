@@ -4,11 +4,12 @@
 namespace cfg {
 
 // Scheduling
+
 static constexpr int kScheduleMinutes[6] = {0,10,20,30,40,50};
 
 // Measurement
 static constexpr int kDistanceSamples = 3;
-static constexpr int kMaxDistanceMm  = 10000;   // adjust
+static constexpr int kMaxDistanceMm  = 30000;   // max ultrasonic range ~30m
 static constexpr int kMaxRepeatRead  = 5;       // MAXIMUM_TIMES_REPEAT
 static constexpr uint32_t kSensorWarmupMs = 1500;
 static constexpr uint32_t kSensorHandshakeTimeoutMs = 800;
@@ -29,6 +30,7 @@ static constexpr uint32_t kSimHttpActionTimeoutMs = 30000;
 static constexpr const char* kSimApnViettel = "v-internet";
 static constexpr const char* kSimApnVinaphone = "m3-world";
 static constexpr uint32_t kDcomPowerEdgeDelayMs = 100;
+static constexpr uint32_t kDcomBootDelayMs = 500;
 static constexpr const char* kDcomWifiSsid = "Minh Tuan";
 static constexpr const char* kDcomWifiPassword = "j12345678";
 

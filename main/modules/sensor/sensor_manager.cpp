@@ -53,6 +53,7 @@ bool SensorManager::ensureReady(ISensor*& outActive, LogBuffer& log) {
 bool SensorManager::read3(ISensor* active, int out[cfg::kDistanceSamples], LogBuffer& log) {
   if (!active) return false;
 
+  bool allOk = true;
   for (int i = 0; i < cfg::kDistanceSamples; ++i) {
     int mm = 0;
     bool ok = false;
@@ -68,11 +69,8 @@ bool SensorManager::read3(ISensor* active, int out[cfg::kDistanceSamples], LogBu
       ok = true;
       break;
     }
-    if (!ok) {
-      out[i] = 0;
-      return false;
-    }
-    out[i] = mm;
+    out[i] = ok ? mm : 0;
+    if (!ok) allOk = false;
   }
-  return true;
+  return allOk;
 }

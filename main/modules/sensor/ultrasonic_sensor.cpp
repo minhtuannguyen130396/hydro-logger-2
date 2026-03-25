@@ -235,7 +235,7 @@ bool parseReadResponse(const uint8_t* response,
   offsetMm    = readI16Be(&response[7]);
   baudrate    = readU16Be(&response[9]);
   nodeAddress = readU16Be(&response[11]);
-
+  distanceMm = rangeMm - distanceMm;
   ESP_LOGI(TAG, "[PARSE] OK reg[0x0001]=dist:%u  reg[0x0002]=range:%u  "
            "reg[0x0003]=offset:%d  reg[0x0004]=baud:%u  reg[0x0005]=node:%u",
            (unsigned)distanceMm, (unsigned)rangeMm,

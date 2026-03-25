@@ -971,11 +971,6 @@ bool Sim4GModule::httpGet(const std::string& url, std::string& response,
 // ============================================================
 void Sim4GModule::powerOff(LogBuffer& log) {
   ESP_LOGI(TAG, "power OFF");
-  if (active_) {
-    httpTermSafe(log);
-    (void)sendAtOk("AT+CGACT=0,1", 3000, log);
-  }
-
   log.appendf("[SIM] power idle LOW\n");
   IoController::instance().setSimPower(false);
   active_ = false;
