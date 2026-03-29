@@ -21,6 +21,7 @@ static const char* TAG = "SyncTask";
 // On failure: warn, wait 2s, retry. After deadline: log error, return false.
 static constexpr uint32_t kFetchTimeoutMs  = 20000;
 static constexpr uint32_t kFetchRetryDelayMs = 2000;
+static constexpr uint32_t kMeasureFlushWaitMs = 45000;
 
 // ============================================================
 // Time sync with 20s retry window
@@ -168,59 +169,100 @@ extern "C" void sync_task_entry(void* arg) {
     // --- Step 2: Time sync (20s retry window) ---
     syncTimeWithRetry(cm.active(), log);
 
+    // The top-of-hour sync is triggered together with the measurement task.
+    // Wait until that measurement finishes publishing so the :00 sample is
+    // included in this sync batch instead of slipping to the next hour.
+    {
+      uint32_t wait_start = (uint32_t)xTaskGetTickCount();
+      while ((ctx->state.get() & AppState::BIT_MEASURE_RUNNING) &&
+             pdTICKS_TO_MS(xTaskGetTickCount() - wait_start) < kMeasureFlushWaitMs) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+      }
+      if (ctx->state.get() & AppState::BIT_MEASURE_RUNNING) {
+        log.appendf("[Sync] wait measure timeout after %ums\n", (unsigned)kMeasureFlushWaitMs);
+      }
+    }
+
     // --- Step 3: Send queued measurements & logs ---
     {
       uint32_t start = (uint32_t)xTaskGetTickCount();
       int sent_meas = 0, sent_log = 0;
+      log.appendf("[Sync] queue start meas=%u log=%u\n",
+                  (unsigned)ctx->bus.measureDepth(),
+                  (unsigned)ctx->bus.logDepth());
 
-      while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < cfg::kSyncWindowMs) {
+      auto withinSyncWindow = [&start]() {
+        return pdTICKS_TO_MS(xTaskGetTickCount() - start) < cfg::kSyncWindowMs;
+      };
+
+      // Drain measurements first so the hourly sync does not spend the whole
+      // window on logs and leave half of the water level readings unsent.
+      while (withinSyncWindow()) {
         MeasurementMsg mm{};
-        LogMsg lm{};
-        bool did = false;
+        if (!ctx->bus.peekMeasurement(mm, cfg::kQueuePopTimeoutMs)) break;
 
-        if (ctx->bus.popMeasurement(mm, cfg::kQueuePopTimeoutMs)) {
-          if (!mm.valid) {
-            log.appendf("[Sync] skip invalid measurement d=[%d,%d,%d]\n",
-                        mm.dist_mm[0], mm.dist_mm[1], mm.dist_mm[2]);
-            did = true;
-            continue;
-          }
-          mm.meta.voltage_mv = AdcDrv::readMilliVolts();
-
-          std::string json = JsonPacker::packWaterLevel(mm);
-          ESP_LOGI(TAG, "water_level payload: %s", json.c_str());
-          log.appendf("[Sync] TX water_level: %s\n", json.c_str());
-
-          bool ok = false;
-          if (cm.active() && cm.active()->type() == CommType::Sim4G) {
-            ok = cm.active()->sendPayload(ServerApi::waterLevelUrl(), json, log);
-          } else {
-            ok = ServerApi::sendWaterLevel(json, log);
-          }
-          log.appendf("[Sync] water_level send=%d\n", (int)ok);
-          sent_meas += ok ? 1 : 0;
-          did = true;
+        if (!mm.valid) {
+          log.appendf("[Sync] skip invalid measurement d=[%d,%d,%d]\n",
+                      mm.dist_mm[0], mm.dist_mm[1], mm.dist_mm[2]);
+          ctx->bus.ackMeasurement();
+          continue;
         }
+        mm.meta.voltage_mv = AdcDrv::readMilliVolts();
 
-        if (ctx->bus.popLog(lm, cfg::kQueuePopTimeoutMs)) {
-          lm.meta.voltage_mv = AdcDrv::readMilliVolts();
-          std::string json = JsonPacker::packLog(lm);
+        std::string json = JsonPacker::packWaterLevel(mm);
+        ESP_LOGI(TAG, "water_level payload: %s", json.c_str());
+        log.appendf("[Sync] TX water_level: %s\n", json.c_str());
 
-          bool ok = false;
-          if (cm.active() && cm.active()->type() == CommType::Sim4G) {
-            ok = cm.active()->sendPayload(ServerApi::logUrl(), json, log);
-          } else {
-            ok = ServerApi::sendLog(json, log);
-          }
-          log.appendf("[Sync] log send=%d\n", (int)ok);
-          sent_log += ok ? 1 : 0;
-          did = true;
+        bool ok = false;
+        if (cm.active() && cm.active()->type() == CommType::Sim4G) {
+          ok = cm.active()->sendPayload(ServerApi::waterLevelUrl(), json, log);
+        } else {
+          ok = ServerApi::sendWaterLevel(json, log);
         }
-
-        if (!did) vTaskDelay(pdMS_TO_TICKS(50));
+        log.appendf("[Sync] water_level send=%d\n", (int)ok);
+        sent_meas += ok ? 1 : 0;
+        if (ok) {
+          ctx->bus.ackMeasurement();
+        } else {
+          log.appendf("[Sync] water_level send FAIL -> keep item in queue, stop drain\n");
+          ctx->state.set(AppState::BIT_LAST_SYNC_FAIL);
+          break;
+        }
       }
 
-      ESP_LOGI(TAG, "send done meas=%d log=%d", sent_meas, sent_log);
+      while (withinSyncWindow()) {
+        LogMsg lm{};
+        if (!ctx->bus.peekLog(lm, cfg::kQueuePopTimeoutMs)) break;
+
+        lm.meta.voltage_mv = AdcDrv::readMilliVolts();
+        std::string json = JsonPacker::packLog(lm);
+
+        bool ok = false;
+        if (cm.active() && cm.active()->type() == CommType::Sim4G) {
+          ok = cm.active()->sendPayload(ServerApi::logUrl(), json, log);
+        } else {
+          ok = ServerApi::sendLog(json, log);
+        }
+        log.appendf("[Sync] log send=%d\n", (int)ok);
+        sent_log += ok ? 1 : 0;
+        if (ok) {
+          ctx->bus.ackLog();
+        } else {
+          log.appendf("[Sync] log send FAIL -> keep item in queue, stop drain\n");
+          ctx->state.set(AppState::BIT_LAST_SYNC_FAIL);
+          break;
+        }
+      }
+
+      const size_t remain_meas = ctx->bus.measureDepth();
+      const size_t remain_log = ctx->bus.logDepth();
+      log.appendf("[Sync] queue end meas=%u log=%u\n",
+                  (unsigned)remain_meas,
+                  (unsigned)remain_log);
+      ESP_LOGI(TAG, "send done meas=%d log=%d remain_meas=%u remain_log=%u",
+               sent_meas, sent_log,
+               (unsigned)remain_meas,
+               (unsigned)remain_log);
     }
 
     // --- Step 4: OTA version check (20s retry window, DCOM only) ---

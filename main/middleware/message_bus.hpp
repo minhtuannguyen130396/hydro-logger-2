@@ -10,8 +10,12 @@ public:
   bool publishMeasurement(const MeasurementMsg& msg);
   bool publishLog(const LogMsg& msg);
 
+  bool peekMeasurement(MeasurementMsg& out, uint32_t timeoutMs);
+  bool peekLog(LogMsg& out, uint32_t timeoutMs);
   bool popMeasurement(MeasurementMsg& out, uint32_t timeoutMs);
   bool popLog(LogMsg& out, uint32_t timeoutMs);
+  bool ackMeasurement();
+  bool ackLog();
 
   size_t measureDepth() const;
   size_t logDepth() const;

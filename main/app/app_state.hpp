@@ -11,6 +11,7 @@ public:
     BIT_LAST_SYNC_FAIL   = (1 << 3),
     BIT_LAST_MEASURE_FAIL= (1 << 4),
     BIT_OTA_RUNNING      = (1 << 5),
+    BIT_MEASURE_RUNNING  = (1 << 6),
   };
 
   bool init() {
