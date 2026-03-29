@@ -6,6 +6,7 @@
 #include "common/time_utils.hpp"
 #include "common/config.hpp"
 #include "services/power/power_manager.hpp"
+#include "app/app_context.hpp"
 
 static const char* TAG = "Scheduler";
 
@@ -24,7 +25,7 @@ static void notify(TaskHandle_t h) {
 }
 
 extern "C" void scheduler_task_entry(void* arg) {
-  (void)arg;
+  auto* ctx = reinterpret_cast<AppContext*>(arg);
   PowerManager pm;
 
   int last_trigger_minute = -1;
@@ -49,7 +50,12 @@ extern "C" void scheduler_task_entry(void* arg) {
       }
     }
 
-    if (!scheduled) {
+    const bool work_running =
+        ctx && (ctx->state.get() & (AppState::BIT_MEASURE_RUNNING |
+                                    AppState::BIT_SYNC_RUNNING |
+                                    AppState::BIT_OTA_RUNNING));
+
+    if (!scheduled && !work_running) {
       pm.enterSafeMode();
     }
 

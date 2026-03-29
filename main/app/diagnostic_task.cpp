@@ -12,6 +12,7 @@
 #include "services/connectivity/sim4g_module.hpp"
 #include "services/logging/log_service.hpp"
 #include "services/net/server_api.hpp"
+#include "services/pack/json_packer.hpp"
 #include "services/portal/boot_portal.hpp"
 #include "board/adc_drv.hpp"
 #include "common/config.hpp"
@@ -140,6 +141,45 @@ static bool fetch_and_sync_time(ICommModule* module, LogBuffer& log) {
   return true;
 }
 
+static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
+  if (!module) return false;
+
+  MeasurementMsg mm{};
+  RtcPcf8563::instance().getTime(mm.time);
+  mm.meta.voltage_mv = AdcDrv::readMilliVolts();
+
+  SensorManager& sm = SensorManager::instance();
+  ISensor* active = nullptr;
+  if (!sm.ensureReady(active, log)) {
+    ESP_LOGW(TAG, "[Portal] water_level measure FAIL (sensor warmup failed)");
+    return false;
+  }
+
+  int out[cfg::kDistanceSamples]{};
+  bool ok = sm.read3(active, out, log);
+  active->finishMeasurement(log);
+  for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
+  mm.valid = ok;
+
+  if (!ok) {
+    ESP_LOGW(TAG, "[Portal] water_level measure FAIL (sensor read failed)");
+    return false;
+  }
+
+  std::string json = JsonPacker::packWaterLevel(mm);
+  ESP_LOGI(TAG, "[Portal] TX water_level: %s", json.c_str());
+
+  bool sent = false;
+  if (module->type() == CommType::Sim4G) {
+    sent = module->sendPayload(ServerApi::waterLevelUrl(), json, log);
+  } else {
+    sent = ServerApi::sendWaterLevel(json, log);
+  }
+
+  ESP_LOGI(TAG, "[Portal] water_level send=%d", (int)sent);
+  return sent;
+}
+
 /// Run connectivity test, populate PortalDiagResult, keep SIM alive if OK.
 static PortalDiagResult test_connectivity() {
   ESP_LOGI(TAG, "[Conn] testing SIM + DCOM in parallel (timeout %lu ms)...",
@@ -232,6 +272,7 @@ static void diagnostic_task_fn(void* arg) {
 
   const uint32_t portal_start_tick = (uint32_t)xTaskGetTickCount();
   uint32_t last_fetch_tick = 0;
+  bool boot_water_level_sent = false;
 
   ESP_LOGI(TAG, "[Portal] entering portal loop (time via %s)", time_mod_name);
 
@@ -253,7 +294,10 @@ static void diagnostic_task_fn(void* arg) {
         ESP_LOGI(TAG, "[Portal] time fetch #%lu via %s",
                  (unsigned long)(elapsed / cfg::kDiagTimeFetchIntervalMs + 1), time_mod_name);
         LogBuffer log = LogService::createSessionLog();
-        fetch_and_sync_time(time_module, log);
+        bool synced = fetch_and_sync_time(time_module, log);
+        if (synced && !boot_water_level_sent) {
+          boot_water_level_sent = measure_and_send_water_level(time_module, log);
+        }
         last_fetch_tick = (uint32_t)xTaskGetTickCount();
       }
     }

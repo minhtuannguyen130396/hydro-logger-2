@@ -26,6 +26,7 @@ extern "C" void measure_task_entry(void* arg) {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+    ctx->state.set(AppState::BIT_MEASURE_RUNNING);
     LogBuffer log = LogService::createSessionLog();
     log.appendf("[Measure] start\n");
 
@@ -51,6 +52,7 @@ extern "C" void measure_task_entry(void* arg) {
 
       mm.valid = false;
       PublishApi::publishMeasurement(mm);
+      ctx->state.clear(AppState::BIT_MEASURE_RUNNING);
       ESP_LOGW(TAG, "sensor warmup fail");
       continue;
     }
@@ -75,6 +77,7 @@ extern "C" void measure_task_entry(void* arg) {
     lm.len = (uint16_t)std::min(log.size(), (int)sizeof(lm.text)-1);
     PublishApi::publishLog(lm);
 
+    ctx->state.clear(AppState::BIT_MEASURE_RUNNING);
     ESP_LOGI(TAG, "measure done valid=%d d=[%d,%d,%d]",
              (int)mm.valid, mm.dist_mm[0], mm.dist_mm[1], mm.dist_mm[2]);
   }
