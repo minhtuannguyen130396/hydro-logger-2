@@ -35,13 +35,13 @@ This dashboard is used to collect data from this device.
 +-------------------------------------------------------------+
 |                         Services                            |
 |  ConnectivityManager | HttpClient | JsonPacker | OtaService |
-|  ServerApi | LogService | PowerManager                     |
+|  ServerApi | LogService | PowerManager                      |
 +-------------------------------------------------------------+
 |                         Modules                             |
-|  SensorManager (Laser/Ultrasonic) | RTC PCF8563 | IO Ctrl  |
+|  SensorManager (Laser/Ultrasonic) | RTC PCF8563 | IO Ctrl   |
 +-------------------------------------------------------------+
 |                      Board Drivers                          |
-|           GPIO  |  UART  |  I2C  |  ADC                    |
+|           GPIO  |  UART  |  I2C  |  ADC                     |
 +-------------------------------------------------------------+
 |                     ESP-IDF / FreeRTOS                      |
 +-------------------------------------------------------------+
