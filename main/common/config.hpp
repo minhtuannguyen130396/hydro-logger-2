@@ -1,6 +1,10 @@
 #pragma once
 #include <cstdint>
 
+#ifndef CFG_SYNC_SEND_RETRIES
+#define CFG_SYNC_SEND_RETRIES 3
+#endif
+
 namespace cfg {
 
 // Scheduling
@@ -19,6 +23,7 @@ static constexpr int kSensorHandshakeRetries = 3;
 static constexpr uint32_t kConnCheckTimeoutMs = 60000;
 static constexpr uint32_t kSyncWindowMs = 60000;
 static constexpr uint32_t kQueuePopTimeoutMs = 200;
+static constexpr int kSyncSendRetries = CFG_SYNC_SEND_RETRIES;
 static constexpr uint32_t kSimPowerEdgeDelayMs = 100;
 static constexpr uint32_t kSimBootDelayMs = 10000;
 static constexpr uint32_t kSimAtHandshakeTimeoutMs = 12000;
@@ -35,7 +40,7 @@ static constexpr const char* kDcomWifiSsid = "Minh Tuan";
 static constexpr const char* kDcomWifiPassword = "j12345678";
 
 // Queues
-static constexpr int kMeasureQueueLen = 10;
+static constexpr int kMeasureQueueLen = 30;
 static constexpr int kLogQueueLen     = 20;
 
 // Logging

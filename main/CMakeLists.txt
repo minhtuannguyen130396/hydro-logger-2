@@ -7,6 +7,7 @@ idf_component_register(
     "app/notify_task.cpp"
     "app/ota_task.cpp"
     "app/diagnostic_task.cpp"
+    "app/failover_task.cpp"
 
     "middleware/message_bus.cpp"
     "middleware/publish_api.cpp"
@@ -56,6 +57,8 @@ idf_component_register(
     "modules/io"
     "board"
     "common"
+  REQUIRES
+    spiffs
 )
 
 # C++ standard
