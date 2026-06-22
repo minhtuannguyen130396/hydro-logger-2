@@ -23,6 +23,7 @@ extern "C" void measure_task_entry(void* arg);
 extern "C" void sync_task_entry(void* arg);
 extern "C" void notify_task_entry(void* arg);
 extern "C" void ota_task_entry(void* arg);
+extern "C" void failover_task_entry(void* arg);
 
 static const char* TAG = "AppMain";
 
@@ -43,14 +44,22 @@ extern "C" void app_main(void) {
     }
   }
 
-  NvsStore::init();
+  if (!NvsStore::init()) {
+    ESP_LOGI(TAG, "NVS init failed");
+  }
 
   IoController::instance().init();
   AdcDrv::init();
   RtcPcf8563::instance().init();
 
-  g_ctx.bus.init();
+  if (!g_ctx.bus.init()) {
+    ESP_LOGI(TAG, "MessageBus init failed");
+  }
   g_ctx.state.init();
+  g_ctx.failover_q = xQueueCreate(1, sizeof(FailoverRequest));
+  if (!g_ctx.failover_q) {
+    ESP_LOGI(TAG, "Failover queue init failed");
+  }
   PublishApi::setBus(&g_ctx.bus);
 
   // Boot diagnostic: test all modules, then wait kDiagnosticDelayMs
@@ -62,6 +71,7 @@ extern "C" void app_main(void) {
   xTaskCreate(&sync_task_entry,    "sync_task",    8192, &g_ctx, 5, nullptr);
   xTaskCreate(&ota_task_entry,     "ota_task",     8192, &g_ctx, 4, nullptr);
   xTaskCreate(&notify_task_entry,  "notify_task",  4096, &g_ctx, 3, nullptr);
+  xTaskCreate(&failover_task_entry,"failover_task",4096, &g_ctx, 3, nullptr);
   xTaskCreate(&scheduler_task_entry,"scheduler",   4096, &g_ctx, 7, nullptr);
 
   ESP_LOGI(TAG, "tasks created");

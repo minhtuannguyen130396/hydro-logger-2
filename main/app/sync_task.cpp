@@ -4,6 +4,7 @@
 
 #include "app/app_state.hpp"
 #include "app/app_context.hpp"
+#include "app/failover_task.hpp"
 #include "modules/rtc/rtc_pcf8563.hpp"
 #include "services/connectivity/connectivity_manager.hpp"
 #include "services/connectivity/sim4g_module.hpp"
@@ -22,6 +23,17 @@ static const char* TAG = "SyncTask";
 static constexpr uint32_t kFetchTimeoutMs  = 20000;
 static constexpr uint32_t kFetchRetryDelayMs = 2000;
 static constexpr uint32_t kMeasureFlushWaitMs = 45000;
+
+template <typename SendFn>
+static bool sendWithRetries(LogBuffer& log,
+                            const char* tag,
+                            SendFn&& sendFn) {
+  for (int attempt = 1; attempt <= cfg::kSyncSendRetries; ++attempt) {
+    log.appendf("[Sync] %s send attempt %d/%d\n", tag, attempt, cfg::kSyncSendRetries);
+    if (sendFn()) return true;
+  }
+  return false;
+}
 
 // ============================================================
 // Time sync with 20s retry window
@@ -156,6 +168,8 @@ extern "C" void sync_task_entry(void* arg) {
     // --- Step 1: Single connectivity warmup (only place that powers ON) ---
     bool conn_ok = cm.warmup(log);
     if (!conn_ok) {
+      const CommType preferred = NvsStore::getLastSuccessComm(CommType::Sim4G);
+      enqueue_failover_request(ctx, preferred, FailoverReason::SyncWarmupFail);
       ctx->state.clear(AppState::BIT_CONN_OK);
       ctx->state.set(AppState::BIT_CONN_FAIL | AppState::BIT_LAST_SYNC_FAIL);
       ctx->state.clear(AppState::BIT_SYNC_RUNNING);
@@ -213,18 +227,22 @@ extern "C" void sync_task_entry(void* arg) {
         ESP_LOGI(TAG, "water_level payload: %s", json.c_str());
         log.appendf("[Sync] TX water_level: %s\n", json.c_str());
 
-        bool ok = false;
-        if (cm.active() && cm.active()->type() == CommType::Sim4G) {
-          ok = cm.active()->sendPayload(ServerApi::waterLevelUrl(), json, log);
-        } else {
-          ok = ServerApi::sendWaterLevel(json, log);
-        }
+        bool ok = sendWithRetries(log, "water_level", [&]() {
+          if (cm.active() && cm.active()->type() == CommType::Sim4G) {
+            return cm.active()->sendPayload(ServerApi::waterLevelUrl(), json, log);
+          }
+          return ServerApi::sendWaterLevel(json, log);
+        });
         log.appendf("[Sync] water_level send=%d\n", (int)ok);
         sent_meas += ok ? 1 : 0;
         if (ok) {
           ctx->bus.ackMeasurement();
         } else {
-          log.appendf("[Sync] water_level send FAIL -> keep item in queue, stop drain\n");
+          if (cm.active()) {
+            enqueue_failover_request(ctx, cm.active()->type(), FailoverReason::SyncSendFail);
+          }
+          log.appendf("[Sync] water_level send FAIL after %d attempts -> keep item in queue, stop drain\n",
+                      cfg::kSyncSendRetries);
           ctx->state.set(AppState::BIT_LAST_SYNC_FAIL);
           break;
         }
@@ -237,18 +255,22 @@ extern "C" void sync_task_entry(void* arg) {
         lm.meta.voltage_mv = AdcDrv::readMilliVolts();
         std::string json = JsonPacker::packLog(lm);
 
-        bool ok = false;
-        if (cm.active() && cm.active()->type() == CommType::Sim4G) {
-          ok = cm.active()->sendPayload(ServerApi::logUrl(), json, log);
-        } else {
-          ok = ServerApi::sendLog(json, log);
-        }
+        bool ok = sendWithRetries(log, "log", [&]() {
+          if (cm.active() && cm.active()->type() == CommType::Sim4G) {
+            return cm.active()->sendPayload(ServerApi::logUrl(), json, log);
+          }
+          return ServerApi::sendLog(json, log);
+        });
         log.appendf("[Sync] log send=%d\n", (int)ok);
         sent_log += ok ? 1 : 0;
         if (ok) {
           ctx->bus.ackLog();
         } else {
-          log.appendf("[Sync] log send FAIL -> keep item in queue, stop drain\n");
+          if (cm.active()) {
+            enqueue_failover_request(ctx, cm.active()->type(), FailoverReason::SyncSendFail);
+          }
+          log.appendf("[Sync] log send FAIL after %d attempts -> keep item in queue, stop drain\n",
+                      cfg::kSyncSendRetries);
           ctx->state.set(AppState::BIT_LAST_SYNC_FAIL);
           break;
         }
