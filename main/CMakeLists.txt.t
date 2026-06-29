@@ -23,6 +23,7 @@ idf_component_register(
     "component_test/test_i2c.cpp"
     "component_test/test_timesync.cpp"
     "component_test/test_post_api.cpp"
+    "component_test/test_ota.cpp"
 
     # Reuse existing board drivers (no changes needed)
     "board/gpio_drv.cpp"

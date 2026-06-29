@@ -14,6 +14,10 @@ namespace timeu {
   bool isScheduledMinute(int minute);
   bool isSyncMinute(int minute); // minute == 0
 
+  // Next scheduled minute strictly greater than currentMinute, wrapping to the
+  // first scheduled minute of the next hour. Used to program the RTC wake alarm.
+  int nextScheduledMinute(int currentMinute);
+
   // Parse server time string "HH:MM:SS_DD:MM:YYYY" into DateTime
   bool parseServerTime(const char* str, DateTime& out);
 

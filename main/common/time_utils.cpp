@@ -18,6 +18,15 @@ bool isSyncMinute(int minute) {
   return minute == 0;
 }
 
+int nextScheduledMinute(int currentMinute) {
+  // kScheduleMinutes is sorted ascending: return the first entry past the
+  // current minute; if none remain this hour, wrap to the first entry.
+  for (int m : cfg::kScheduleMinutes) {
+    if (m > currentMinute) return m;
+  }
+  return cfg::kScheduleMinutes[0];
+}
+
 bool parseServerTime(const char* str, DateTime& out) {
   int h = 0, m = 0, s = 0, d = 0, mon = 0, y = 0;
   if (std::sscanf(str, "%d:%d:%d_%d:%d:%d", &h, &m, &s, &d, &mon, &y) != 6) {

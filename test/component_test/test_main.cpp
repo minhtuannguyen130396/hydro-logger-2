@@ -25,6 +25,8 @@ extern void test_gpio();
 extern void test_i2c_scan();
 extern void test_timesync();
 extern void test_post_api();
+extern void test_ota();
+extern void test_ota_download();
 
 static const char* TAG = "TestMain";
 
@@ -98,6 +100,8 @@ static void printMenu() {
   printf("  test i2c        - Test I2C bus scan\n");
   printf("  test timesync   - Sync RTC from server time\n");
   printf("  test postapi    - POST water_level to server\n");
+  printf("  test ota        - OTA version check (GET /ota/version)\n");
+  printf("  test otadl      - OTA download + verify (no reboot)\n");
   printf("  test all        - Run all tests\n");
   printf("  reboot          - Restart ESP32\n");
   printf("==========================================\n");
@@ -129,6 +133,10 @@ static void dispatchCommand(const char* cmd) {
     test_timesync();
   } else if (strcmp(cmd, "test postapi") == 0) {
     test_post_api();
+  } else if (strcmp(cmd, "test ota") == 0) {
+    test_ota();
+  } else if (strcmp(cmd, "test otadl") == 0) {
+    test_ota_download();
   } else if (strcmp(cmd, "test all") == 0) {
     printf("\n===== RUNNING ALL TESTS =====\n");
     test_rtc();
@@ -182,11 +190,9 @@ extern "C" void app_main(void) {
   char cmdBuf[64];
   while (true) {
     printf("> ");
-    // fflush(stdout);
-    test_ultrasonic();
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    // if (readLine(cmdBuf, sizeof(cmdBuf), 0)) {
-    //   dispatchCommand(cmdBuf);
-    // }
+    fflush(stdout);
+    if (readLine(cmdBuf, sizeof(cmdBuf), 0)) {
+      dispatchCommand(cmdBuf);
+    }
   }
 }

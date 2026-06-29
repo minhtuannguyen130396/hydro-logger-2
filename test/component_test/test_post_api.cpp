@@ -146,7 +146,10 @@ static bool simHttpPost(const char* url, const std::string& json, std::string& r
 
   // Parse +HTTPACTION: 1,200,xx
   int method = 0, status = 0, bodyLen = 0;
-  std::sscanf(actionLine.c_str(), "+HTTPACTION: %d,%d,%d", &method, &status, &bodyLen);
+  const char* p = std::strstr(actionLine.c_str(), "+HTTPACTION:");
+  if (p) {
+    std::sscanf(p, "+HTTPACTION: %d,%d,%d", &method, &status, &bodyLen);
+  }
   TEST_INFO(NAME, "HTTP status=%d bodyLen=%d", status, bodyLen);
 
   if (status < 200 || status >= 300) {
@@ -154,23 +157,41 @@ static bool simHttpPost(const char* url, const std::string& json, std::string& r
     return false;
   }
 
-  // Read response body
   if (bodyLen > 0) {
     std::snprintf(cmd, sizeof(cmd), "AT+HTTPREAD=0,%d", bodyLen);
     UartDrv::flushSim();
     TEST_INFO(NAME, "AT> %s", cmd);
     UartDrv::writeLineSim(cmd);
 
-    if (simWaitToken("+HTTPREAD:", 5000)) {
-      response.clear();
-      uint32_t start = (uint32_t)xTaskGetTickCount();
-      while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < 5000) {
-        std::string line = UartDrv::readLineSim(500);
-        if (line.empty()) continue;
-        if (line.find("OK") != std::string::npos) break;
-        if (line.find("ERROR") != std::string::npos) break;
-        if (!response.empty()) response += '\n';
-        response += line;
+    std::string rawRead;
+    uint32_t start = (uint32_t)xTaskGetTickCount();
+    while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < 5000) {
+      std::string chunk = UartDrv::readLineSim(500);
+      if (chunk.empty()) continue;
+      TEST_INFO(NAME, "  <- %s", chunk.c_str());
+      rawRead += chunk;
+      if (rawRead.find("+HTTPREAD:") != std::string::npos &&
+          rawRead.find("OK") != std::string::npos) {
+        break;
+      }
+      if (rawRead.find("ERROR") != std::string::npos) break;
+    }
+
+    response.clear();
+    size_t hdr = rawRead.find("+HTTPREAD:");
+    if (hdr != std::string::npos) {
+      size_t bodyStart = rawRead.find('\n', hdr);
+      if (bodyStart != std::string::npos) {
+        bodyStart++;
+        size_t bodyEnd = rawRead.rfind("OK");
+        if (bodyEnd != std::string::npos && bodyEnd > bodyStart) {
+          response = rawRead.substr(bodyStart, bodyEnd - bodyStart);
+        } else {
+          response = rawRead.substr(bodyStart);
+        }
+        while (!response.empty() && (response.back() == '\r' || response.back() == '\n' || response.back() == ' ')) {
+          response.pop_back();
+        }
       }
     }
   }

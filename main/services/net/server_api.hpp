@@ -22,4 +22,8 @@ public:
   // Water-level POST endpoint (Trieu Duong API)
   static const char* waterLevelUrl();
   static bool sendWaterLevel(const std::string& json, LogBuffer& log);
+
+  // Firmware version POST endpoint (Trieu Duong API)
+  static const char* firmwareVersionApiUrl();
+  static bool sendFirmwareVersion(const std::string& json, LogBuffer& log);
 };

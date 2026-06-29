@@ -19,6 +19,7 @@ static constexpr gpio_num_t ESP_VOLTAGE_ADC_PIN = GPIO_NUM_39; // SENSOR_VN
 static constexpr int ADC_CHAN              = 3;                // ADC1_CH3 = GPIO39
 static constexpr gpio_num_t R_SIGNAL       = GPIO_NUM_34;
 static constexpr gpio_num_t L_SIGNAL       = GPIO_NUM_35;
+static constexpr int L_SIGNAL_ADC_CHAN     = 7;  // ADC1_CH7 = GPIO35 (analog pressure input)
 
 // Not populated in the current schematic; keep invalid to avoid conflicting with I2C SDA on GPIO21.
 static constexpr gpio_num_t SPEAKER        = GPIO_NUM_NC;
@@ -35,6 +36,16 @@ static constexpr int UART_SIM_BAUD         = 115200;
 #define PINS_UART1_DEVICE_SUPERSONIC 2
 #ifndef PINS_UART1_DEVICE
 #define PINS_UART1_DEVICE PINS_UART1_DEVICE_SUPERSONIC
+#endif
+
+// Active level sensor selection.
+// Default on this branch: analog pressure sensor read from L_SIGNAL (ADC1_CH7).
+// Override at build time to fall back to the UART1 sensor (laser/supersonic):
+//   -DSENSOR_DEVICE=SENSOR_DEVICE_UART1
+#define SENSOR_DEVICE_PRESSURE 1
+#define SENSOR_DEVICE_UART1    2
+#ifndef SENSOR_DEVICE
+#define SENSOR_DEVICE SENSOR_DEVICE_PRESSURE
 #endif
 
 static constexpr int UART_SENSOR_NUM       = 1;

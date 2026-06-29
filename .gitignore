@@ -19,3 +19,12 @@ Thumbs.db
 
 # Claude Code worktrees
 .claude/
+
+# Local build artifacts / scratch
+.codex_tmp_pdf/
+ota_dist/
+log_real_time
+.idfrun.ps1
+sdkconfig.release
+*.bak
+*.testoverlay

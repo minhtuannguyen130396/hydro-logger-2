@@ -113,7 +113,10 @@ static bool simHttpGet(const char* url, std::string& body) {
 
   // Parse +HTTPACTION: 0,200,19
   int method = 0, status = 0, bodyLen = 0;
-  std::sscanf(actionLine.c_str(), "+HTTPACTION: %d,%d,%d", &method, &status, &bodyLen);
+  const char* p = std::strstr(actionLine.c_str(), "+HTTPACTION:");
+  if (p) {
+    std::sscanf(p, "+HTTPACTION: %d,%d,%d", &method, &status, &bodyLen);
+  }
   TEST_INFO(NAME, "HTTP status=%d bodyLen=%d", status, bodyLen);
 
   if (status < 200 || status >= 300 || bodyLen <= 0) {
@@ -121,27 +124,41 @@ static bool simHttpGet(const char* url, std::string& body) {
     return false;
   }
 
-  // Read response body
   std::snprintf(cmd, sizeof(cmd), "AT+HTTPREAD=0,%d", bodyLen);
   UartDrv::flushSim();
   TEST_INFO(NAME, "AT> %s", cmd);
   UartDrv::writeLineSim(cmd);
 
-  if (!simWaitToken("+HTTPREAD:", 5000)) {
-    simSendAt("AT+HTTPTERM", "OK", 1000);
-    return false;
-  }
-
-  // Read body lines until OK
-  body.clear();
+  std::string rawRead;
   uint32_t start = (uint32_t)xTaskGetTickCount();
   while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < 5000) {
-    std::string line = UartDrv::readLineSim(500);
-    if (line.empty()) continue;
-    if (line.find("OK") != std::string::npos) break;
-    if (line.find("ERROR") != std::string::npos) break;
-    if (!body.empty()) body += '\n';
-    body += line;
+    std::string chunk = UartDrv::readLineSim(500);
+    if (chunk.empty()) continue;
+    TEST_INFO(NAME, "  <- %s", chunk.c_str());
+    rawRead += chunk;
+    if (rawRead.find("+HTTPREAD:") != std::string::npos &&
+        rawRead.find("OK") != std::string::npos) {
+      break;
+    }
+    if (rawRead.find("ERROR") != std::string::npos) break;
+  }
+
+  body.clear();
+  size_t hdr = rawRead.find("+HTTPREAD:");
+  if (hdr != std::string::npos) {
+    size_t bodyStart = rawRead.find('\n', hdr);
+    if (bodyStart != std::string::npos) {
+      bodyStart++;
+      size_t bodyEnd = rawRead.rfind("OK");
+      if (bodyEnd != std::string::npos && bodyEnd > bodyStart) {
+        body = rawRead.substr(bodyStart, bodyEnd - bodyStart);
+      } else {
+        body = rawRead.substr(bodyStart);
+      }
+      while (!body.empty() && (body.back() == '\r' || body.back() == '\n' || body.back() == ' ')) {
+        body.pop_back();
+      }
+    }
   }
 
   simSendAt("AT+HTTPTERM", "OK", 1000);

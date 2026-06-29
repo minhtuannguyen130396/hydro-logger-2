@@ -30,7 +30,6 @@ static void logRawResponse(const std::string& line) {
 }
 
 // Simple AT command sender for test mode
-// Reads all data until timeout, then checks the full response at once.
 static bool sendAt(const char* cmd, const char* expect, uint32_t timeoutMs) {
   UartDrv::flushSim();
   TEST_INFO(NAME, "AT> %s", cmd);
@@ -40,22 +39,22 @@ static bool sendAt(const char* cmd, const char* expect, uint32_t timeoutMs) {
     return false;
   }
 
-  std::string resp = UartDrv::readLineSim(timeoutMs);
-  logRawResponse(resp);
+  uint32_t start = (uint32_t)xTaskGetTickCount();
+  while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < timeoutMs) {
+    std::string line = UartDrv::readLineSim(200);
+    if (line.empty()) continue;
 
-  if (resp.empty()) {
-    TEST_INFO(NAME, "  timeout - no data received");
-    return false;
+    logRawResponse(line);
+
+    if (line.find(expect) != std::string::npos) {
+      return true;
+    }
+    if (line.find("ERROR") != std::string::npos) {
+      return false;
+    }
   }
 
-  if (resp.find(expect) != std::string::npos) {
-    return true;
-  }
-  if (resp.find("ERROR") != std::string::npos) {
-    return false;
-  }
-
-  TEST_INFO(NAME, "  '%s' not found in response", expect);
+  TEST_INFO(NAME, "  timeout waiting for '%s'", expect);
   return false;
 }
 
@@ -69,25 +68,27 @@ void test_sim() {
     return;
   }
 
-  // Power on (edge trigger HIGH->LOW)
-  TEST_INFO(NAME, "Power ON (HIGH -> LOW edge)");
-  IoController::instance().setSimPower(true);
-  testDelayMs(100);
+  // Power on (edge trigger LOW->HIGH)
+  TEST_INFO(NAME, "Power ON (LOW -> HIGH)");
   IoController::instance().setSimPower(false);
+  testDelayMs(100);
+  IoController::instance().setSimPower(true);
   TEST_INFO(NAME, "Wait boot 12000ms...");
-  testDelayMs(12000);
+  testDelayMs(20000);
 
-  // AT handshake at 115200 baud: try AT + get phone number
+  // AT handshake at the configured baud with a longer timeout.
   bool at_ok = false;
   for (int i = 0; i < 50; i++) {
-    if (sendAt("AT", "OK", 3000)) { at_ok = true; break; }
-    if (sendAt("AT+CNUM", "OK", 3000)) { at_ok = true; break; }
-    testDelayMs(2000);
+    if (sendAt("AT", "OK", 3000)) {
+      at_ok = true;
+      break;
+    }
+    testDelayMs(500);
   }
 
   if (!at_ok) {
     TEST_FAIL(NAME, "AT handshake failed - module not responding");
-    IoController::instance().setSimPower(true);
+    IoController::instance().setSimPower(false);
     return;
   }
   TEST_INFO(NAME, "AT handshake OK");
@@ -128,7 +129,7 @@ void test_sim() {
 
   // Power off
   TEST_INFO(NAME, "Power OFF");
-  IoController::instance().setSimPower(true); // idle HIGH
+  IoController::instance().setSimPower(false); // idle LOW
 
   if (sim_ok && net_ok) {
     TEST_PASS(NAME);

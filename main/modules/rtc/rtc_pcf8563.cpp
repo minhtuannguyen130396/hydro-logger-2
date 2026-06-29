@@ -126,3 +126,38 @@ bool RtcPcf8563::isTimerTriggered(bool& triggered) {
   triggered = (cs2 & (1u << 2)) != 0;
   return true;
 }
+
+// ---------- Minute alarm API (deep-sleep wakeup) ----------
+
+bool RtcPcf8563::setMinuteAlarm(uint8_t minute) {
+  PCF8563_Alarm alarm{};
+  alarm.enable_minute    = true;   // match on minute only -> fires once per hour
+  alarm.minute           = minute;
+  alarm.interrupt_enable = true;   // AIE=1 -> INT asserts (low) when AF sets
+
+  PCF8563_Status st = pcf8563_setAlarm(&alarm);
+  if (st != PCF8563_OK) {
+    ESP_LOGE(TAG, "setMinuteAlarm failed: %d", (int)st);
+    return false;
+  }
+  ESP_LOGI(TAG, "alarm set at minute %u", (unsigned)minute);
+  return true;
+}
+
+bool RtcPcf8563::clearAlarmFlag() {
+  PCF8563_Status st = pcf8563_clearAlarmFlag();
+  if (st != PCF8563_OK) {
+    ESP_LOGE(TAG, "clearAlarmFlag failed: %d", (int)st);
+    return false;
+  }
+  return true;
+}
+
+bool RtcPcf8563::disableAlarm() {
+  PCF8563_Status st = pcf8563_disableAlarm();
+  if (st != PCF8563_OK) {
+    ESP_LOGE(TAG, "disableAlarm failed: %d", (int)st);
+    return false;
+  }
+  return true;
+}

@@ -10,6 +10,13 @@ public:
   bool checkInternet(uint32_t timeoutMs, LogBuffer& log) override;
   bool sendPayload(const std::string& url, const std::string& json, LogBuffer& log) override;
   bool httpGet(const std::string& url, std::string& response, LogBuffer& log);
+
+  // OTA: stream a firmware image from `binUrl` into the next OTA partition,
+  // downloading in chunks via AT+HTTPREAD and writing through esp_ota_*.
+  // Returns true once the full image is written and the boot partition is set;
+  // the caller is responsible for restarting.
+  bool downloadOtaImage(const std::string& binUrl, LogBuffer& log);
+
   void powerOff(LogBuffer& log) override;
   CommType type() const override { return CommType::Sim4G; }
 

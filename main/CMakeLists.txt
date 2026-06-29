@@ -8,6 +8,7 @@ idf_component_register(
     "app/ota_task.cpp"
     "app/diagnostic_task.cpp"
     "app/failover_task.cpp"
+    "app/config_console.cpp"
 
     "middleware/message_bus.cpp"
     "middleware/publish_api.cpp"
@@ -22,10 +23,10 @@ idf_component_register(
     "services/logging/log_service.cpp"
     "services/power/power_manager.cpp"
     "services/ota/ota_service.cpp"
-    "services/portal/boot_portal.cpp"
 
     "modules/sensor/laser_sensor.cpp"
     "modules/sensor/ultrasonic_sensor.cpp"
+    "modules/sensor/pressure_sensor.cpp"
     "modules/sensor/sensor_manager.cpp"
     "modules/rtc/pcf8563.cpp"
     "modules/rtc/rtc_pcf8563.cpp"
@@ -50,7 +51,6 @@ idf_component_register(
     "services/logging"
     "services/power"
     "services/ota"
-    "services/portal"
     "modules"
     "modules/sensor"
     "modules/rtc"
@@ -59,6 +59,19 @@ idf_component_register(
     "common"
   REQUIRES
     spiffs
+    app_update
+    nvs_flash
+    esp_adc
+    esp_wifi
+    esp_event
+    esp_netif
+    esp_http_client
+    esp_https_ota
+    esp_partition
+    json
+    driver
+    esp_driver_gpio
+    esp_driver_uart
 )
 
 # C++ standard
