@@ -39,13 +39,13 @@ static constexpr int UART_SIM_BAUD         = 115200;
 #endif
 
 // Active level sensor selection.
-// Default on this branch: analog pressure sensor read from L_SIGNAL (ADC1_CH7).
-// Override at build time to fall back to the UART1 sensor (laser/supersonic):
-//   -DSENSOR_DEVICE=SENSOR_DEVICE_UART1
+// Default on this branch: UART1 sensor (supersonic). See PINS_UART1_DEVICE above.
+// Override at build time to use the analog pressure sensor instead:
+//   -DSENSOR_DEVICE=SENSOR_DEVICE_PRESSURE
 #define SENSOR_DEVICE_PRESSURE 1
 #define SENSOR_DEVICE_UART1    2
 #ifndef SENSOR_DEVICE
-#define SENSOR_DEVICE SENSOR_DEVICE_PRESSURE
+#define SENSOR_DEVICE SENSOR_DEVICE_UART1
 #endif
 
 static constexpr int UART_SENSOR_NUM       = 1;
