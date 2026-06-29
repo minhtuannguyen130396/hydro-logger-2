@@ -17,14 +17,15 @@ static const char* TAG = "MeasureTask";
 extern "C" void measure_task_entry(void* arg) {
   auto* ctx = reinterpret_cast<AppContext*>(arg);
 
-  // Register our handle for scheduler
-  extern void register_task_handles(TaskHandle_t, TaskHandle_t, TaskHandle_t);
-  // scheduler registers all; in this skeleton we register only when tasks start.
-  // We'll let sync/ota tasks also call this and overwrite; it's fine for skeleton.
-  register_task_handles(xTaskGetCurrentTaskHandle(), nullptr, nullptr);
-
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    // Skip measurement if OTA download is in progress to avoid resource
+    // contention (sensor I/O, ADC, queue writes) during a critical flash write.
+    if (ctx->state.get() & AppState::BIT_OTA_RUNNING) {
+      ESP_LOGI(TAG, "OTA running, skipping measurement");
+      continue;
+    }
 
     ctx->state.set(AppState::BIT_MEASURE_RUNNING);
     LogBuffer log = LogService::createSessionLog();

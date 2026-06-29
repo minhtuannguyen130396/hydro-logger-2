@@ -19,11 +19,11 @@ static const char* NAME = "POST_API";
 static const char* kWaterLevelUrl = "http://donuoctrieuduong.xyz/dev_test/water_lever.php";
 
 // Default test payload
-static const char* kDefaultSerial = "TD_MW_0100";
-static constexpr int kDefaultWaterLevel0 = 0;
-static constexpr int kDefaultWaterLevel1 = 0;
-static constexpr int kDefaultWaterLevel2 = 0;
-static constexpr int kDefaultVoltage     = 0;
+static const char* kDefaultSerial = "TD_MW_00012";
+static constexpr int kDefaultWaterLevel0 = 15230;
+static constexpr int kDefaultWaterLevel1 = 15228;
+static constexpr int kDefaultWaterLevel2 = 15231;
+static constexpr int kDefaultVoltage     = 4850;
 
 // ──────────────────────────────────────────────
 // Build JSON payload
@@ -74,22 +74,13 @@ static bool simWaitToken(const char* token, uint32_t timeoutMs, std::string* mat
   return false;
 }
 
-static bool parseHttpAction(const std::string& line, int& method, int& status, int& bodyLen) {
-  const char* p = std::strstr(line.c_str(), "+HTTPACTION:");
-  if (!p) return false;
-
-  if (std::sscanf(p, "+HTTPACTION: %d,%d,%d", &method, &status, &bodyLen) == 3) return true;
-  if (std::sscanf(p, "+HTTPACTION:%d,%d,%d", &method, &status, &bodyLen) == 3) return true;
-  return false;
-}
-
 static bool simConnect() {
   if (!UartDrv::initSimUart()) return false;
 
   TEST_INFO(NAME, "SIM: Power ON (HIGH->LOW)");
-  IoController::instance().setSimPower(false);
-  testDelayMs(100);
   IoController::instance().setSimPower(true);
+  testDelayMs(100);
+  IoController::instance().setSimPower(false);
   TEST_INFO(NAME, "SIM: Wait boot 12s...");
   testDelayMs(12000);
 
@@ -117,12 +108,9 @@ static void simDisconnect() {
 static bool simHttpPost(const char* url, const std::string& json, std::string& response) {
   char cmd[320];
 
-  TEST_INFO(NAME, "SIM HTTP POST url='%s'", url);
-  TEST_INFO(NAME, "SIM HTTP POST payload='%s'", json.c_str());
-
   simSendAt("AT+HTTPTERM", "OK", 1000);
   if (!simSendAt("AT+HTTPINIT", "OK", 2000)) return false;
-  testDelayMs(300);
+  if (!simSendAt("AT+HTTPPARA=\"CID\",1", "OK", 1000)) return false;
 
   // Set URL
   std::snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"URL\",\"%s\"", url);
@@ -138,18 +126,14 @@ static bool simHttpPost(const char* url, const std::string& json, std::string& r
   // Send JSON body
   UartDrv::flushSim();
   TEST_INFO(NAME, "DATA> %s", json.c_str());
-  if (UartDrv::writeSim(reinterpret_cast<const uint8_t*>(json.data()),
-                        (int)json.size()) != (int)json.size()) {
-    TEST_INFO(NAME, "SIM payload write failed");
-    simSendAt("AT+HTTPTERM", "OK", 1000);
-    return false;
-  }
+  UartDrv::writeLineSim(json.c_str());
   if (!simWaitToken("OK", 5000)) return false;
 
   // HTTP POST (method 1)
   UartDrv::flushSim();
   TEST_INFO(NAME, "AT> AT+HTTPACTION=1");
-  if (!UartDrv::writeLineSim("AT+HTTPACTION=1")) {
+  UartDrv::writeLineSim("AT+HTTPACTION=1");
+  if (!simWaitToken("OK", 2000)) {
     simSendAt("AT+HTTPTERM", "OK", 1000);
     return false;
   }
@@ -160,14 +144,11 @@ static bool simHttpPost(const char* url, const std::string& json, std::string& r
     return false;
   }
 
-  TEST_INFO(NAME, "SIM HTTPACTION raw='%s'", actionLine.c_str());
-
   // Parse +HTTPACTION: 1,200,xx
   int method = 0, status = 0, bodyLen = 0;
-  if (!parseHttpAction(actionLine, method, status, bodyLen)) {
-    TEST_INFO(NAME, "SIM HTTPACTION parse failed");
-    simSendAt("AT+HTTPTERM", "OK", 1000);
-    return false;
+  const char* p = std::strstr(actionLine.c_str(), "+HTTPACTION:");
+  if (p) {
+    std::sscanf(p, "+HTTPACTION: %d,%d,%d", &method, &status, &bodyLen);
   }
   TEST_INFO(NAME, "HTTP status=%d bodyLen=%d", status, bodyLen);
 
@@ -176,28 +157,44 @@ static bool simHttpPost(const char* url, const std::string& json, std::string& r
     return false;
   }
 
-  // Read response body
   if (bodyLen > 0) {
     std::snprintf(cmd, sizeof(cmd), "AT+HTTPREAD=0,%d", bodyLen);
     UartDrv::flushSim();
     TEST_INFO(NAME, "AT> %s", cmd);
     UartDrv::writeLineSim(cmd);
 
-    if (simWaitToken("+HTTPREAD:", 5000)) {
-      response.clear();
-      uint32_t start = (uint32_t)xTaskGetTickCount();
-      while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < 5000) {
-        std::string line = UartDrv::readLineSim(500);
-        if (line.empty()) continue;
-        if (line.find("OK") != std::string::npos) break;
-        if (line.find("ERROR") != std::string::npos) break;
-        if (!response.empty()) response += '\n';
-        response += line;
+    std::string rawRead;
+    uint32_t start = (uint32_t)xTaskGetTickCount();
+    while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < 5000) {
+      std::string chunk = UartDrv::readLineSim(500);
+      if (chunk.empty()) continue;
+      TEST_INFO(NAME, "  <- %s", chunk.c_str());
+      rawRead += chunk;
+      if (rawRead.find("+HTTPREAD:") != std::string::npos &&
+          rawRead.find("OK") != std::string::npos) {
+        break;
+      }
+      if (rawRead.find("ERROR") != std::string::npos) break;
+    }
+
+    response.clear();
+    size_t hdr = rawRead.find("+HTTPREAD:");
+    if (hdr != std::string::npos) {
+      size_t bodyStart = rawRead.find('\n', hdr);
+      if (bodyStart != std::string::npos) {
+        bodyStart++;
+        size_t bodyEnd = rawRead.rfind("OK");
+        if (bodyEnd != std::string::npos && bodyEnd > bodyStart) {
+          response = rawRead.substr(bodyStart, bodyEnd - bodyStart);
+        } else {
+          response = rawRead.substr(bodyStart);
+        }
+        while (!response.empty() && (response.back() == '\r' || response.back() == '\n' || response.back() == ' ')) {
+          response.pop_back();
+        }
       }
     }
   }
-
-  TEST_INFO(NAME, "SIM HTTP response body='%s'", response.c_str());
 
   simSendAt("AT+HTTPTERM", "OK", 1000);
   return true;
@@ -219,7 +216,6 @@ static void wifiCb(void*, esp_event_base_t base, int32_t id, void*) {
 }
 
 static bool dcomConnect() {
-  return 0;
   TEST_INFO(NAME, "DCOM: Power ON");
   IoController::instance().setDcomPower(false);
   testDelayMs(100);
@@ -276,9 +272,6 @@ static bool dcomHttpPost(const char* url, const std::string& json, std::string& 
   cfg.url = url;
   cfg.timeout_ms = 8000;
 
-  TEST_INFO(NAME, "DCOM HTTP POST url='%s'", url);
-  TEST_INFO(NAME, "DCOM HTTP POST payload='%s'", json.c_str());
-
   esp_http_client_handle_t c = esp_http_client_init(&cfg);
   if (!c) return false;
 
@@ -289,6 +282,12 @@ static bool dcomHttpPost(const char* url, const std::string& json, std::string& 
   esp_err_t err = esp_http_client_perform(c);
   int code = esp_http_client_get_status_code(c);
 
+  if (err != ESP_OK || code < 200 || code >= 300) {
+    TEST_INFO(NAME, "HTTP POST failed err=%s code=%d", esp_err_to_name(err), code);
+    esp_http_client_cleanup(c);
+    return false;
+  }
+
   response.clear();
   char buf[256];
   int r = 0;
@@ -296,15 +295,8 @@ static bool dcomHttpPost(const char* url, const std::string& json, std::string& 
     response.append(buf, buf + r);
   }
 
-  if (err != ESP_OK || code < 200 || code >= 300) {
-    TEST_INFO(NAME, "DCOM HTTP POST failed err=%s code=%d response='%s'",
-              esp_err_to_name(err), code, response.c_str());
-    esp_http_client_cleanup(c);
-    return false;
-  }
-
   esp_http_client_cleanup(c);
-  TEST_INFO(NAME, "DCOM HTTP POST status=%d response='%s'", code, response.c_str());
+  TEST_INFO(NAME, "HTTP POST status=%d response='%s'", code, response.c_str());
   return true;
 }
 

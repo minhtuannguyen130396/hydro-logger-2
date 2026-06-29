@@ -25,11 +25,13 @@ extern void test_gpio();
 extern void test_i2c_scan();
 extern void test_timesync();
 extern void test_post_api();
+extern void test_ota();
+extern void test_ota_download();
 
 static const char* TAG = "TestMain";
 
 // ──────────────────────────────────────────────
-// Console line reader using getchar/putchar (no UART driver needed)
+// UART0 line reader (blocking, with echo)
 // ──────────────────────────────────────────────
 static bool readLine(char* buf, int maxLen, uint32_t timeoutMs) {
   int pos = 0;
@@ -40,19 +42,15 @@ static bool readLine(char* buf, int maxLen, uint32_t timeoutMs) {
       break;
     }
 
-    int ch = getchar();
-    if (ch == EOF) {
-      vTaskDelay(pdMS_TO_TICKS(20));
-      continue;
-    }
+    uint8_t ch = 0;
+    int n = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(100));
+    if (n <= 0) continue;
 
     // Echo
-    putchar(ch);
-    fflush(stdout);
+    uart_write_bytes(UART_NUM_0, (const char*)&ch, 1);
 
     if (ch == '\r' || ch == '\n') {
-      putchar('\n');
-      fflush(stdout);
+      uart_write_bytes(UART_NUM_0, "\n", 1);
       break;
     }
 
@@ -60,8 +58,7 @@ static bool readLine(char* buf, int maxLen, uint32_t timeoutMs) {
     if (ch == 0x08 || ch == 0x7F) {
       if (pos > 0) {
         pos--;
-        printf("\b \b");
-        fflush(stdout);
+        uart_write_bytes(UART_NUM_0, "\b \b", 3);
       }
       continue;
     }
@@ -103,6 +100,8 @@ static void printMenu() {
   printf("  test i2c        - Test I2C bus scan\n");
   printf("  test timesync   - Sync RTC from server time\n");
   printf("  test postapi    - POST water_level to server\n");
+  printf("  test ota        - OTA version check (GET /ota/version)\n");
+  printf("  test otadl      - OTA download + verify (no reboot)\n");
   printf("  test all        - Run all tests\n");
   printf("  reboot          - Restart ESP32\n");
   printf("==========================================\n");
@@ -134,6 +133,10 @@ static void dispatchCommand(const char* cmd) {
     test_timesync();
   } else if (strcmp(cmd, "test postapi") == 0) {
     test_post_api();
+  } else if (strcmp(cmd, "test ota") == 0) {
+    test_ota();
+  } else if (strcmp(cmd, "test otadl") == 0) {
+    test_ota_download();
   } else if (strcmp(cmd, "test all") == 0) {
     printf("\n===== RUNNING ALL TESTS =====\n");
     test_rtc();
@@ -162,8 +165,16 @@ static void dispatchCommand(const char* cmd) {
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "=== COMPONENT TEST MODE ===");
 
-  // UART0 is already configured by ESP-IDF console — no driver install needed.
-  // readLine() uses getchar()/putchar() via VFS.
+  // Install UART0 driver for command input
+  uart_config_t uart0_cfg{};
+  uart0_cfg.baud_rate = 115200;
+  uart0_cfg.data_bits = UART_DATA_8_BITS;
+  uart0_cfg.parity = UART_PARITY_DISABLE;
+  uart0_cfg.stop_bits = UART_STOP_BITS_1;
+  uart0_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+
+  uart_driver_install(UART_NUM_0, 2048, 0, 0, nullptr, 0);
+  uart_param_config(UART_NUM_0, &uart0_cfg);
 
   // Init basic peripherals (all power OFF by default)
   NvsStore::init();
@@ -180,7 +191,6 @@ extern "C" void app_main(void) {
   while (true) {
     printf("> ");
     fflush(stdout);
-
     if (readLine(cmdBuf, sizeof(cmdBuf), 0)) {
       dispatchCommand(cmdBuf);
     }

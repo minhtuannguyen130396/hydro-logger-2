@@ -8,7 +8,6 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
-#include "esp_vfs_spiffs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "middleware/data_models.hpp"

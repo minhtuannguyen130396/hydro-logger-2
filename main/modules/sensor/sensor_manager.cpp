@@ -2,7 +2,9 @@
 
 #include "board/pins.hpp"
 
-#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+#if SENSOR_DEVICE == SENSOR_DEVICE_PRESSURE
+#include "modules/sensor/pressure_sensor.hpp"
+#elif PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
 #include "modules/sensor/laser_sensor.hpp"
 #elif PINS_UART1_DEVICE == PINS_UART1_DEVICE_SUPERSONIC
 #include "modules/sensor/ultrasonic_sensor.hpp"
@@ -11,13 +13,20 @@
 namespace {
 
 const char* sensorName(SensorType type) {
-  return (type == SensorType::Laser) ? "Laser" : "Ultrasonic";
+  switch (type) {
+    case SensorType::Laser:      return "Laser";
+    case SensorType::Ultrasonic: return "Ultrasonic";
+    case SensorType::Pressure:   return "Pressure";
+  }
+  return "Unknown";
 }
 
 } // namespace
 
 ISensor* SensorManager::selected() {
-#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+#if SENSOR_DEVICE == SENSOR_DEVICE_PRESSURE
+  return &PressureSensor::instance();
+#elif PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
   return &LaserSensor::instance();
 #elif PINS_UART1_DEVICE == PINS_UART1_DEVICE_SUPERSONIC
   return &UltrasonicSensor::instance();

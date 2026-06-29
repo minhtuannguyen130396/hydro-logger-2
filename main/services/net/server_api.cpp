@@ -45,3 +45,12 @@ bool ServerApi::sendWaterLevel(const std::string& json, LogBuffer& log) {
   log.appendf("[API] sendWaterLevel\n");
   return HttpClient::postJson(waterLevelUrl(), json, 8000);
 }
+
+const char* ServerApi::firmwareVersionApiUrl() {
+  return "http://donuoctrieuduong.xyz/hydro-logger-api/api/firmware_version_api.php";
+}
+
+bool ServerApi::sendFirmwareVersion(const std::string& json, LogBuffer& log) {
+  log.appendf("[API] sendFirmwareVersion\n");
+  return HttpClient::postJson(firmwareVersionApiUrl(), json, 8000);
+}

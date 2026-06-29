@@ -1,4 +1,5 @@
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -13,7 +14,7 @@
 #include "services/logging/log_service.hpp"
 #include "services/net/server_api.hpp"
 #include "services/pack/json_packer.hpp"
-#include "services/portal/boot_portal.hpp"
+#include "services/ota/ota_service.hpp"
 #include "board/adc_drv.hpp"
 #include "common/config.hpp"
 #include "common/nvs_store.hpp"
@@ -22,6 +23,13 @@
 static const char* TAG = "Diagnostic";
 
 static SemaphoreHandle_t s_diag_done = nullptr;
+
+/// Result of the boot connectivity test: which comm module(s) reached the
+/// internet. Whichever is OK is kept powered on for the diagnostic window.
+struct DiagConnResult {
+  bool dcom_ok = false;  // Wi-Fi (DCOM)
+  bool sim_ok  = false;  // 4G (SIM)
+};
 
 // ============================================================
 // Individual diagnostic tests
@@ -141,6 +149,8 @@ static bool fetch_and_sync_time(ICommModule* module, LogBuffer& log) {
   return true;
 }
 
+#include "board/pins.hpp"
+
 static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
   if (!module) return false;
 
@@ -150,20 +160,24 @@ static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
 
   SensorManager& sm = SensorManager::instance();
   ISensor* active = nullptr;
-  if (!sm.ensureReady(active, log)) {
+  bool ok = false;
+  if (sm.ensureReady(active, log)) {
+    int out[cfg::kDistanceSamples]{};
+    ok = sm.read3(active, out, log);
+    active->finishMeasurement(log);
+    for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
+  } else {
     ESP_LOGW(TAG, "[Portal] water_level measure FAIL (sensor warmup failed)");
-    return false;
   }
-
-  int out[cfg::kDistanceSamples]{};
-  bool ok = sm.read3(active, out, log);
-  active->finishMeasurement(log);
-  for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
   mm.valid = ok;
 
   if (!ok) {
-    ESP_LOGW(TAG, "[Portal] water_level measure FAIL (sensor read failed)");
+#if SENSOR_DEVICE == SENSOR_DEVICE_PRESSURE
+    ESP_LOGW(TAG, "[Portal] water_level measure FAIL - pressure build, sending raw anyway");
+#else
+    ESP_LOGW(TAG, "[Portal] water_level measure FAIL");
     return false;
+#endif
   }
 
   std::string json = JsonPacker::packWaterLevel(mm);
@@ -180,8 +194,93 @@ static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
   return sent;
 }
 
-/// Run connectivity test, populate PortalDiagResult, keep SIM alive if OK.
-static PortalDiagResult test_connectivity() {
+// ============================================================
+// Boot-time firmware version check + OTA
+// ============================================================
+// Runs in the diagnostic as soon as a comm module is up, so a freshly published
+// server image is picked up at boot instead of waiting for the first hourly
+// sync. Routed through whichever module connected: DCOM uses esp_https_ota over
+// the netif, SIM uses the AT-command HTTP stack (chunked HTTPREAD into the OTA
+// partition). On a successful flash the device restarts into the new image,
+// which re-runs this diagnostic on the next cold boot. Mirrors
+// sync_task's otaCheckWithRetry.
+static void diag_ota_check(ICommModule* module, LogBuffer& log) {
+  if (!cfg::kOtaEnabled) {
+    ESP_LOGI(TAG, "[OTA] disabled (kOtaEnabled=false)");
+    log.appendf("[OTA] disabled\n");
+    return;
+  }
+  if (!cfg::kOtaEndpointsConfigured) {
+    ESP_LOGI(TAG, "[OTA] skip (endpoints not configured)");
+    log.appendf("[OTA] skip (endpoints not configured)\n");
+    return;
+  }
+  if (!module) {
+    ESP_LOGI(TAG, "[OTA] skip (no connected comm)");
+    log.appendf("[OTA] skip (no connected comm)\n");
+    return;
+  }
+
+  const char* commName = (module->type() == CommType::Sim4G) ? "SIM4G" : "DCOM";
+  ESP_LOGI(TAG, "[OTA] check start (comm=%s, current=%s)", commName, cfg::kCurrentFwVersion);
+  log.appendf("[OTA] check start (comm=%s)\n", commName);
+
+  OtaService ota;
+  if (ota.checkAndUpdate(module, cfg::kFirmwareVersionUrl, cfg::kFirmwareBinUrl, log)) {
+    // Update flashed + boot partition set — reboot into the new image.
+    log.appendf("[OTA] update OK, restarting...\n");
+    ESP_LOGI(TAG, "[OTA] success, restarting in 2s...");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    esp_restart();
+  }
+
+  // false = up-to-date or this boot's attempt failed; sync cycle retries later.
+  ESP_LOGI(TAG, "[OTA] no update applied");
+  log.appendf("[OTA] no update applied\n");
+}
+
+static void send_firmware_version_info(ICommModule* module, LogBuffer& log) {
+  if (!module) return;
+
+  char serial[32]{};
+  NvsStore::getDeviceSerial(serial, sizeof(serial));
+  if (std::strlen(serial) == 0) {
+    std::strcpy(serial, "TD_MW_0007"); // fallback as requested / default
+  }
+
+  // Strip "ver" prefix if present
+  const char* raw_ver = cfg::kCurrentFwVersion;
+  if (std::strncmp(raw_ver, "ver", 3) == 0) {
+    raw_ver += 3;
+  }
+
+  // Construct JSON: { "device_id": "...", "firmware_version": "..." }
+  std::string json = "{";
+  json += "\"device_id\":\"";
+  json += serial;
+  json += "\",\"firmware_version\":\"";
+  json += raw_ver;
+  json += "\"}";
+
+  ESP_LOGI(TAG, "[FW_API] POSTing fw version: %s", json.c_str());
+  log.appendf("[FW_API] POSTing fw version: %s\n", json.c_str());
+
+  bool sent = false;
+  if (module->type() == CommType::Sim4G) {
+    sent = module->sendPayload(ServerApi::firmwareVersionApiUrl(), json, log);
+  } else {
+    sent = ServerApi::sendFirmwareVersion(json, log);
+  }
+
+  ESP_LOGI(TAG, "[FW_API] send result: %s", sent ? "SUCCESS" : "FAIL");
+  log.appendf("[FW_API] send result: %s\n", sent ? "SUCCESS" : "FAIL");
+}
+
+/// Run connectivity test: bring up SIM + DCOM in parallel and keep whichever
+/// reached the internet powered on. Nothing is powered off here — the diagnostic
+/// active window that follows uses the link for water-level sends, time sync and
+/// the fw-version/OTA check. Wi-Fi (DCOM) in particular stays up the whole time.
+static DiagConnResult test_connectivity() {
   ESP_LOGI(TAG, "[Conn] testing SIM + DCOM in parallel (timeout %lu ms)...",
            (unsigned long)kConnDiagTimeoutMs);
 
@@ -215,21 +314,7 @@ static PortalDiagResult test_connectivity() {
   ESP_LOGI(TAG, "[Conn] result: DCOM=%s SIM=%s",
            dcom_ok ? "OK" : "FAIL", sim_ok ? "OK" : "FAIL");
 
-  // Power off DCOM now (we need Wi-Fi for portal AP later)
-  if (dcom_ok) {
-    LogBuffer log = LogService::createSessionLog();
-    DcomModule::instance().powerOff(log);
-  }
-
-  // Keep SIM alive if it succeeded — used for time fetch during portal
-  // (SIM UART doesn't conflict with Wi-Fi AP)
-
-  return PortalDiagResult{
-    .dcom_ok    = dcom_ok,
-    .sim_ok     = sim_ok,
-    .dcom_power = dcom_param.power_ok,
-    .sim_power  = sim_param.power_ok,
-  };
+  return DiagConnResult{ .dcom_ok = dcom_ok, .sim_ok = sim_ok };
 }
 
 // ============================================================
@@ -251,69 +336,75 @@ static void diagnostic_task_fn(void* arg) {
   test_rtc();
   test_adc();
   test_sensor();
-  PortalDiagResult diag = test_connectivity();
+  DiagConnResult diag = test_connectivity();
 
   ESP_LOGI(TAG, "========== BOOT DIAGNOSTIC END ==========");
 
   // ========================================================
-  // Config portal phase
+  // Diagnostic active window
   // ========================================================
-  if (!BootPortal::start(diag)) {
-    ESP_LOGW(TAG, "portal start FAIL, skipping portal phase");
-  }
-
-  // Portal + repeated time fetch loop
-  // - Portal stays alive while HTTP requests arrive within kPortalInactivityTimeoutMs
-  // - Time fetch runs every kDiagTimeFetchIntervalMs for kDiagTimeFetchWindowMs total
-  ICommModule* time_module = diag.sim_ok
-      ? static_cast<ICommModule*>(&Sim4GModule::instance())
-      : nullptr;  // only SIM can be used; Wi-Fi is in AP mode
-  const char* time_mod_name = time_module ? "SIM4G" : "none";
-
-  const uint32_t portal_start_tick = (uint32_t)xTaskGetTickCount();
-  uint32_t last_fetch_tick = 0;
-  bool boot_water_level_sent = false;
-
-  ESP_LOGI(TAG, "[Portal] entering portal loop (time via %s)", time_mod_name);
-
-  while (BootPortal::isActive()) {
-    uint32_t now_tick = (uint32_t)xTaskGetTickCount();
-
-    // Check portal inactivity timeout
-    if (BootPortal::msSinceLastRequest() >= cfg::kPortalInactivityTimeoutMs) {
-      ESP_LOGI(TAG, "[Portal] inactivity timeout (%lu ms), stopping",
-               (unsigned long)cfg::kPortalInactivityTimeoutMs);
-      break;
-    }
-
-    // Repeated time fetch (within the time-fetch window)
-    uint32_t elapsed = pdTICKS_TO_MS(now_tick - portal_start_tick);
-    if (time_module && elapsed < cfg::kDiagTimeFetchWindowMs) {
-      uint32_t since_fetch = pdTICKS_TO_MS(now_tick - last_fetch_tick);
-      if (last_fetch_tick == 0 || since_fetch >= cfg::kDiagTimeFetchIntervalMs) {
-        ESP_LOGI(TAG, "[Portal] time fetch #%lu via %s",
-                 (unsigned long)(elapsed / cfg::kDiagTimeFetchIntervalMs + 1), time_mod_name);
-        LogBuffer log = LogService::createSessionLog();
-        bool synced = fetch_and_sync_time(time_module, log);
-        if (synced && !boot_water_level_sent) {
-          boot_water_level_sent = measure_and_send_water_level(time_module, log);
-        }
-        last_fetch_tick = (uint32_t)xTaskGetTickCount();
-      }
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-
-  BootPortal::stop();
-
-  // Power off SIM if still active
-  if (diag.sim_ok) {
+  // Keep the comm link up and exercise the full data path. Prefer Wi-Fi (DCOM)
+  // for the data path, fall back to SIM; the unused module is powered off to save
+  // current. Every cfg::kDiagCycleIntervalMs (30s) we send a water-level reading,
+  // sync the RTC from the server, and run the fw-version/OTA check.
+  //
+  // Window length:
+  //   - no OTA update -> fixed cfg::kDiagWindowMs (120s)
+  //   - OTA update    -> diag_ota_check blocks on the download with its own
+  //                      timeout and restarts the device on success, so the fixed
+  //                      window only bounds the no-OTA case.
+  ICommModule* active = nullptr;
+  const char* active_name = "none";
+  {
     LogBuffer log = LogService::createSessionLog();
-    Sim4GModule::instance().powerOff(log);
+    if (diag.dcom_ok) {
+      active = &DcomModule::instance();              // Wi-Fi stays up the whole window
+      active_name = "DCOM";
+      if (diag.sim_ok) Sim4GModule::instance().powerOff(log);  // unused on this path
+    } else if (diag.sim_ok) {
+      active = &Sim4GModule::instance();
+      active_name = "SIM4G";
+    }
   }
 
-  ESP_LOGI(TAG, "========== PORTAL PHASE COMPLETE ==========");
+  if (active) {
+    ESP_LOGI(TAG, "[Diag] active window %lu ms via %s (cycle every %lu ms)",
+             (unsigned long)cfg::kDiagWindowMs, active_name,
+             (unsigned long)cfg::kDiagCycleIntervalMs);
+
+    const uint32_t window_start = (uint32_t)xTaskGetTickCount();
+    uint32_t last_cycle_tick = 0;
+    bool first_cycle = true;
+    uint32_t cycle = 0;
+
+    while (pdTICKS_TO_MS((uint32_t)xTaskGetTickCount() - window_start)
+           < cfg::kDiagWindowMs) {
+      uint32_t now_tick = (uint32_t)xTaskGetTickCount();
+      if (first_cycle ||
+          pdTICKS_TO_MS(now_tick - last_cycle_tick) >= cfg::kDiagCycleIntervalMs) {
+        last_cycle_tick = now_tick;  // pace from cycle start so cadence stays ~30s
+        ESP_LOGI(TAG, "[Diag] cycle #%lu via %s", (unsigned long)(++cycle), active_name);
+        LogBuffer log = LogService::createSessionLog();
+
+        measure_and_send_water_level(active, log);  // bắn dữ liệu mực nước
+        fetch_and_sync_time(active, log);           // sync time
+        if (first_cycle) {
+          send_firmware_version_info(active, log);  // report current fw to dashboard
+        }
+        diag_ota_check(active, log);                // check fw-version + OTA (may restart)
+
+        first_cycle = false;
+      }
+      vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    LogBuffer log = LogService::createSessionLog();
+    active->powerOff(log);
+  } else {
+    ESP_LOGW(TAG, "[Diag] no comm module reached internet, skipping active window");
+  }
+
+  ESP_LOGI(TAG, "========== DIAGNOSTIC WINDOW COMPLETE ==========");
   ESP_LOGI(TAG, "starting main tasks in %lu ms...",
            (unsigned long)cfg::kDiagnosticDelayMs);
   vTaskDelay(pdMS_TO_TICKS(cfg::kDiagnosticDelayMs));
@@ -325,7 +416,7 @@ static void diagnostic_task_fn(void* arg) {
 void diagnostic_run_blocking() {
   s_diag_done = xSemaphoreCreateBinary();
 
-  // Larger stack for portal + sensor reads
+  // Larger stack for the diagnostic active window + sensor reads
   xTaskCreate(&diagnostic_task_fn, "diagnostic", 12288, nullptr, 8, nullptr);
 
   xSemaphoreTake(s_diag_done, portMAX_DELAY);

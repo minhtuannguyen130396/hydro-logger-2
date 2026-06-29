@@ -27,14 +27,10 @@ bool s_handlers_ready = false;
 
 bool isFatalDisconnectReason(uint8_t reason) {
   switch (reason) {
-    case WIFI_REASON_NO_AP_FOUND:
     case WIFI_REASON_AUTH_FAIL:
     case WIFI_REASON_ASSOC_FAIL:
     case WIFI_REASON_HANDSHAKE_TIMEOUT:
     case WIFI_REASON_CONNECTION_FAIL:
-    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
-    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
-    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
       return true;
     default:
       return false;

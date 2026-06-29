@@ -1,5 +1,6 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -16,6 +17,9 @@
 
 // diagnostic (runs once at boot, then self-deletes)
 extern void diagnostic_run_blocking();
+
+// runtime config console: reads "serial_number:TD_MW_0012" etc. from UART0
+extern void config_console_start();
 
 // task entry functions
 extern "C" void scheduler_task_entry(void* arg);
@@ -62,13 +66,31 @@ extern "C" void app_main(void) {
   }
   PublishApi::setBus(&g_ctx.bus);
 
-  // Boot diagnostic: test all modules, then wait kDiagnosticDelayMs
-  diagnostic_run_blocking();
-  ESP_LOGI(TAG, "diagnostic complete, starting main tasks");
+  // Runtime config console (UART0). Start it before the diagnostic so the
+  // operator can type "serial_number:TD_MW_0012" during the boot/diagnostic
+  // window to persist the device code to NVS.
+  config_console_start();
 
-  // Create tasks
-  xTaskCreate(&measure_task_entry, "measure_task", 6144, &g_ctx, 6, nullptr);
-  xTaskCreate(&sync_task_entry,    "sync_task",    8192, &g_ctx, 5, nullptr);
+  // Wake cause decides the boot path:
+  //  - cold boot (power-on / reset / brownout = UNDEFINED): run the full boot
+  //    diagnostic (self-test + connectivity + active data window).
+  //  - RTC alarm (EXT0): we were woken to take a scheduled measurement, so skip
+  //    the diagnostic and go straight into the measure flow. Clear the alarm
+  //    flag first so the RTC releases the INT line (held low until acknowledged).
+  const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    ESP_LOGI(TAG, "woke from RTC alarm (EXT0), skipping diagnostic");
+    RtcPcf8563::instance().clearAlarmFlag();
+  } else {
+    // Boot diagnostic: test all modules, then wait kDiagnosticDelayMs
+    diagnostic_run_blocking();
+    ESP_LOGI(TAG, "diagnostic complete, starting main tasks");
+  }
+
+  // Create tasks. measure/sync handles are captured so the orchestrator
+  // (scheduler) can notify them directly.
+  xTaskCreate(&measure_task_entry, "measure_task", 6144, &g_ctx, 6, &g_ctx.measure_h);
+  xTaskCreate(&sync_task_entry,    "sync_task",    8192, &g_ctx, 5, &g_ctx.sync_h);
   xTaskCreate(&ota_task_entry,     "ota_task",     8192, &g_ctx, 4, nullptr);
   xTaskCreate(&notify_task_entry,  "notify_task",  4096, &g_ctx, 3, nullptr);
   xTaskCreate(&failover_task_entry,"failover_task",4096, &g_ctx, 3, nullptr);

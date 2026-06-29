@@ -13,6 +13,13 @@ public:
   bool clearTimerFlag();
   bool isTimerTriggered(bool& triggered);
 
+  // Minute alarm for deep-sleep wakeup. Drives the INT pin low (open-drain,
+  // active-low) when the RTC minute matches, every hour. setMinuteAlarm also
+  // clears any pending alarm flag (AF) so INT is released high until it fires.
+  bool setMinuteAlarm(uint8_t minute);
+  bool clearAlarmFlag();
+  bool disableAlarm();
+
 private:
   RtcPcf8563() = default;
 };

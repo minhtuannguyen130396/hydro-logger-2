@@ -3,7 +3,7 @@
 
 #include "services/logging/log_buffer.hpp"
 
-enum class SensorType : uint8_t { Laser=0, Ultrasonic=1 };
+enum class SensorType : uint8_t { Laser=0, Ultrasonic=1, Pressure=2 };
 
 class ISensor {
 public:

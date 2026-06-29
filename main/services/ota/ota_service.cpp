@@ -1,5 +1,7 @@
 #include "services/ota/ota_service.hpp"
 #include "services/net/server_api.hpp"
+#include "services/connectivity/comm_module.hpp"
+#include "services/connectivity/sim4g_module.hpp"
 #include "common/config.hpp"
 
 #include "esp_log.h"
@@ -12,10 +14,11 @@
 
 static const char* TAG = "OTA";
 
-bool OtaService::checkAndUpdate(const std::string& versionUrl, const std::string& binUrl, LogBuffer& log) {
+bool OtaService::checkAndUpdate(ICommModule* active, const std::string& versionUrl,
+                                const std::string& binUrl, LogBuffer& log) {
   // Step 1: Fetch remote version
   std::string remoteVersion;
-  if (!fetchAndParseVersion(versionUrl, remoteVersion, log)) {
+  if (!fetchAndParseVersion(active, versionUrl, remoteVersion, log)) {
     log.appendf("[OTA] version fetch/parse failed\n");
     return false;
   }
@@ -35,7 +38,7 @@ bool OtaService::checkAndUpdate(const std::string& versionUrl, const std::string
     log.appendf("[OTA] download attempt %d/%d\n", attempt, cfg::kOtaMaxAttempts);
     ESP_LOGI(TAG, "OTA attempt %d/%d", attempt, cfg::kOtaMaxAttempts);
 
-    if (performOta(binUrl, log)) {
+    if (performOta(active, binUrl, log)) {
       log.appendf("[OTA] update OK, pending reboot\n");
       ESP_LOGI(TAG, "OTA success, pending reboot");
       return true;
@@ -50,9 +53,18 @@ bool OtaService::checkAndUpdate(const std::string& versionUrl, const std::string
   return false;
 }
 
-bool OtaService::fetchAndParseVersion(const std::string& versionUrl, std::string& remoteVersion, LogBuffer& log) {
+bool OtaService::fetchAndParseVersion(ICommModule* active, const std::string& versionUrl,
+                                      std::string& remoteVersion, LogBuffer& log) {
   std::string body;
-  if (!ServerApi::fetchFirmwareVersionJson(body, log)) {
+  bool fetched;
+  if (active && active->type() == CommType::Sim4G) {
+    // SIM modem: fetch over the AT-command HTTP stack (no TCP/IP netif).
+    fetched = static_cast<Sim4GModule*>(active)->httpGet(versionUrl, body, log);
+  } else {
+    // Wi-Fi / netif path: ESP-IDF HTTP client.
+    fetched = ServerApi::fetchFirmwareVersionJson(body, log);
+  }
+  if (!fetched) {
     return false;
   }
 
@@ -66,10 +78,12 @@ bool OtaService::fetchAndParseVersion(const std::string& versionUrl, std::string
     return false;
   }
 
-  cJSON* ver = cJSON_GetObjectItem(root, "version");
+  // Server format: { "fw_version": "verX.Y.Z" }. Accept "version" as a fallback.
+  cJSON* ver = cJSON_GetObjectItem(root, "fw_version");
+  if (!ver) ver = cJSON_GetObjectItem(root, "version");
   if (!ver || !cJSON_IsString(ver) || !ver->valuestring) {
-    ESP_LOGE(TAG, "missing 'version' field");
-    log.appendf("[OTA] missing version field\n");
+    ESP_LOGE(TAG, "missing 'fw_version' field");
+    log.appendf("[OTA] missing fw_version field\n");
     cJSON_Delete(root);
     return false;
   }
@@ -85,7 +99,24 @@ bool OtaService::needsUpdate(const std::string& remoteVersion) {
   return remoteVersion != cfg::kCurrentFwVersion;
 }
 
-bool OtaService::performOta(const std::string& binUrl, LogBuffer& log) {
+bool OtaService::checkVersionAvailable(ICommModule* active, const std::string& versionUrl, LogBuffer& log) {
+  std::string remoteVersion;
+  if (!fetchAndParseVersion(active, versionUrl, remoteVersion, log)) {
+    return false;
+  }
+  return needsUpdate(remoteVersion);
+}
+
+bool OtaService::performOta(ICommModule* active, const std::string& binUrl, LogBuffer& log) {
+  // SIM modem path: download via AT-command HTTPREAD straight into the OTA
+  // partition. esp_https_ota cannot reach the network here (the cellular link
+  // is not exposed as a TCP/IP netif).
+  if (active && active->type() == CommType::Sim4G) {
+    return static_cast<Sim4GModule*>(active)->downloadOtaImage(binUrl, log);
+  }
+
+  // Wi-Fi / netif path below: esp_https_ota over the ESP-IDF HTTP stack.
+
   // Check OTA partition availability
   const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
   if (!updatePartition) {

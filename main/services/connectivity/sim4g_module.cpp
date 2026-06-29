@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "board/uart_drv.hpp"
 #include "common/config.hpp"
 #include "freertos/FreeRTOS.h"
@@ -963,6 +966,318 @@ bool Sim4GModule::httpGet(const std::string& url, std::string& response,
   }
 
   ESP_LOGI(TAG, "[HTTP:GET] OK response='%s'", response.c_str());
+  return true;
+}
+
+// ============================================================
+// OTA — chunked firmware download via AT+HTTPREAD
+// ============================================================
+namespace {
+
+// Read the "+HTTPREAD: <len>" header line that precedes a data block.
+// Reads byte-by-byte so it stops exactly at the newline that terminates the
+// header — the next UART byte read after this returns is the first payload
+// byte. A leading "OK" line (some A76XX firmwares emit one) is skipped.
+// Returns true and sets `len` on success; false on AT error / timeout.
+bool readHttpReadLen(int& len, uint32_t timeoutMs) {
+  std::string line;
+  uint32_t start = (uint32_t)xTaskGetTickCount();
+  while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < timeoutMs) {
+    uint8_t c;
+    if (UartDrv::readSim(&c, 1, 200) != 1) continue;
+    if (c == '\n') {
+      const char* p = strstr(line.c_str(), "+HTTPREAD:");
+      if (p) {
+        int n = 0;
+        if (std::sscanf(p + 10, " %d", &n) == 1) {
+          len = n;
+          return true;
+        }
+      }
+      if (isAtError(line)) return false;
+      line.clear();
+    } else if (c != '\r') {
+      line.push_back((char)c);
+    }
+  }
+  return false;
+}
+
+// Fast-drain the trailing response (e.g. "\r\n+HTTPREAD: 0\r\nOK\r\n") up to and
+// including the final "OK", so the next AT+HTTPREAD response starts clean.
+// Returns as soon as "OK" is seen; bounded by timeoutMs.
+void drainToOk(uint32_t timeoutMs) {
+  std::string s;
+  uint32_t start = (uint32_t)xTaskGetTickCount();
+  while (pdTICKS_TO_MS(xTaskGetTickCount() - start) < timeoutMs) {
+    uint8_t c;
+    if (UartDrv::readSim(&c, 1, 100) != 1) continue;
+    s.push_back((char)c);
+    if (s.size() > 64) s.erase(0, s.size() - 64);
+    if (s.find("OK\r") != std::string::npos || s.find("OK\n") != std::string::npos) return;
+  }
+}
+
+} // namespace
+
+bool Sim4GModule::downloadOtaImage(const std::string& binUrl, LogBuffer& log) {
+  ESP_LOGI(TAG, "[OTA] download via SIM: %s", binUrl.c_str());
+  log.appendf("[SIM] OTA download url=%s\n", binUrl.c_str());
+
+  if (!active_) {
+    ESP_LOGW(TAG, "[OTA] FAIL: module inactive");
+    log.appendf("[SIM] OTA FAIL: module inactive\n");
+    return false;
+  }
+
+  // --- Target partition ---
+  const esp_partition_t* part = esp_ota_get_next_update_partition(nullptr);
+  if (!part) {
+    ESP_LOGE(TAG, "[OTA] no OTA partition");
+    log.appendf("[SIM] OTA FAIL: no OTA partition\n");
+    return false;
+  }
+  log.appendf("[SIM] OTA target=%s size=%uK\n", part->label, (unsigned)(part->size / 1024));
+
+  char cmd[320];
+
+  // --- Step 1: Probe total size with one (non-ranged) HTTPACTION header ---
+  // The image is then fetched in small HTTP Range windows (Step 3), each its own
+  // GET, so the modem never caches more than one window. A whole-file GET + ranged
+  // HTTPREAD is unusable on A76XX: HTTPREAD past ~152 KB returns ERROR (body-cache
+  // cap), and accumulating many HTTPACTIONs in one HTTPINIT session also fails.
+  if (!httpInitAndSetBearer("OTA", log)) return false;
+  std::snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"URL\",\"%s\"", binUrl.c_str());
+  if (!sendAtOk(cmd, 2000, log)) {
+    ESP_LOGE(TAG, "[OTA] FAIL at HTTPPARA URL");
+    log.appendf("[SIM] OTA FAIL at HTTPPARA URL\n");
+    httpTermSafe(log);
+    return false;
+  }
+
+  UartDrv::flushSim();
+  log.appendf("[SIM] AT>AT+HTTPACTION=0 (size probe)\n");
+  if (!UartDrv::writeLineSim("AT+HTTPACTION=0")) {
+    ESP_LOGE(TAG, "[OTA] FAIL: write HTTPACTION");
+    log.appendf("[SIM] OTA FAIL: write HTTPACTION\n");
+    httpTermSafe(log);
+    return false;
+  }
+  std::string actionLine;
+  HttpActionResult act{};
+  if (!waitForToken("+HTTPACTION:", cfg::kSimHttpActionTimeoutMs, log, &actionLine) ||
+      !parseHttpActionLine(actionLine, act)) {
+    ESP_LOGE(TAG, "[OTA] FAIL: no +HTTPACTION");
+    log.appendf("[SIM] OTA FAIL: no +HTTPACTION URC\n");
+    httpTermSafe(log);
+    return false;
+  }
+  if (!is2xx(act.status) || act.body_len <= 0) {
+    ESP_LOGW(TAG, "[OTA] FAIL: status=%d len=%d", act.status, act.body_len);
+    log.appendf("[SIM] OTA FAIL: status=%d len=%d\n", act.status, act.body_len);
+    httpTermSafe(log);
+    return false;
+  }
+  const int total = act.body_len;
+  if ((uint32_t)total > part->size) {
+    ESP_LOGE(TAG, "[OTA] image %d > partition %u", total, (unsigned)part->size);
+    log.appendf("[SIM] OTA FAIL: image %d > part %u\n", total, (unsigned)part->size);
+    httpTermSafe(log);
+    return false;
+  }
+  ESP_LOGI(TAG, "[OTA] image size=%d bytes", total);
+  log.appendf("[SIM] OTA image=%d B\n", total);
+  httpTermSafe(log);
+
+  // --- Step 2: Begin flashing (pre-erases `total` bytes on the partition) ---
+  esp_ota_handle_t otaHandle = 0;
+  esp_err_t err = esp_ota_begin(part, total, &otaHandle);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "[OTA] esp_ota_begin: %s", esp_err_to_name(err));
+    log.appendf("[SIM] OTA FAIL: begin %s\n", esp_err_to_name(err));
+    return false;
+  }
+
+  // --- Step 3: Ranged-window download loop ---
+  const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(cfg::kOtaSimTotalTimeoutMs);
+  const int kWindow = cfg::kOtaSimWindowSize;
+  uint8_t buf[256];
+  int offset = 0;
+  bool ok = true;
+  int lastPct = -1;
+
+  while (offset < total) {
+    if ((int32_t)(xTaskGetTickCount() - deadline) >= 0) {
+      ESP_LOGE(TAG, "[OTA] total timeout at %d/%d", offset, total);
+      log.appendf("[SIM] OTA FAIL: timeout %d/%d\n", offset, total);
+      ok = false;
+      break;
+    }
+
+    int win = total - offset;
+    if (win > kWindow) win = kWindow;
+    const int end = offset + win - 1;
+
+    // Fresh HTTP session per window: the modem accumulates each window's response
+    // buffer across HTTPACTIONs within one HTTPINIT session, and after ~10 windows
+    // further AT commands return ERROR — so re-INIT to release it.
+    httpTermSafe(log);
+    if (!sendAtOk("AT+HTTPINIT", 2000, log)) {
+      ESP_LOGE(TAG, "[OTA] FAIL: HTTPINIT @%d", offset);
+      log.appendf("[SIM] OTA FAIL: HTTPINIT @%d\n", offset);
+      ok = false;
+      break;
+    }
+    // Mark the session open so the NEXT window's httpTermSafe() (and the cleanup
+    // after the loop) actually sends AT+HTTPTERM. Without this the flag stays
+    // false, HTTPTERM is never issued, and the following HTTPINIT returns ERROR
+    // because the modem's HTTP service is still initialized.
+    http_inited_ = true;
+    std::snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"URL\",\"%s\"", binUrl.c_str());
+    if (!sendAtOk(cmd, 2000, log)) {
+      ESP_LOGE(TAG, "[OTA] FAIL: set URL @%d", offset);
+      log.appendf("[SIM] OTA FAIL: set URL @%d\n", offset);
+      ok = false;
+      break;
+    }
+    std::snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"USERDATA\",\"Range: bytes=%d-%d\"", offset, end);
+    if (!sendAtOk(cmd, 2000, log)) {
+      ESP_LOGE(TAG, "[OTA] FAIL: set Range @%d", offset);
+      log.appendf("[SIM] OTA FAIL: set Range @%d\n", offset);
+      ok = false;
+      break;
+    }
+
+    UartDrv::flushSim();
+    log.appendf("[SIM] AT>AT+HTTPACTION=0 [%d-%d]\n", offset, end);
+    if (!UartDrv::writeLineSim("AT+HTTPACTION=0")) {
+      ESP_LOGE(TAG, "[OTA] FAIL: write HTTPACTION @%d", offset);
+      log.appendf("[SIM] OTA FAIL: write HTTPACTION @%d\n", offset);
+      ok = false;
+      break;
+    }
+    std::string wline;
+    HttpActionResult wact{};
+    if (!waitForToken("+HTTPACTION:", cfg::kSimHttpActionTimeoutMs, log, &wline) ||
+        !parseHttpActionLine(wline, wact)) {
+      ESP_LOGE(TAG, "[OTA] FAIL: no +HTTPACTION @%d", offset);
+      log.appendf("[SIM] OTA FAIL: no +HTTPACTION @%d\n", offset);
+      ok = false;
+      break;
+    }
+    if (wact.status == 200) {  // Range ignored → server would resend the whole file
+      ESP_LOGE(TAG, "[OTA] Range not honored @%d (got 200, expected 206)", offset);
+      log.appendf("[SIM] OTA FAIL: Range not honored @%d\n", offset);
+      ok = false;
+      break;
+    }
+    if (wact.status != 206 || wact.body_len <= 0) {
+      ESP_LOGE(TAG, "[OTA] bad window status=%d len=%d @%d", wact.status, wact.body_len, offset);
+      log.appendf("[SIM] OTA FAIL: window status=%d len=%d @%d\n", wact.status, wact.body_len, offset);
+      ok = false;
+      break;
+    }
+    const int len = wact.body_len;
+
+    // One AT+HTTPREAD=0,<len> makes the modem stream the window body as a run of
+    // "+HTTPREAD: <n>" sub-blocks (~1024 B each); consume them all. Do NOT issue
+    // another HTTPREAD before the stream ends — a mid-stream HTTPREAD returns ERROR.
+    UartDrv::flushSim();
+    std::snprintf(cmd, sizeof(cmd), "AT+HTTPREAD=0,%d", len);
+    log.appendf("[SIM] AT>%s\n", cmd);
+    if (!UartDrv::writeLineSim(cmd)) {
+      ESP_LOGE(TAG, "[OTA] FAIL: write HTTPREAD @%d", offset);
+      log.appendf("[SIM] OTA FAIL: write HTTPREAD @%d\n", offset);
+      ok = false;
+      break;
+    }
+
+    int wgot = 0;
+    while (wgot < len) {
+      int blk = 0;
+      if (!readHttpReadLen(blk, cfg::kOtaSimReadTimeoutMs)) {
+        ESP_LOGE(TAG, "[OTA] no HTTPREAD header @%d+%d", offset, wgot);
+        log.appendf("[SIM] OTA FAIL: HTTPREAD hdr @%d+%d\n", offset, wgot);
+        ok = false;
+        break;
+      }
+      if (blk <= 0) {
+        ESP_LOGE(TAG, "[OTA] HTTPREAD early end @%d+%d", offset, wgot);
+        log.appendf("[SIM] OTA FAIL: HTTPREAD early end @%d+%d\n", offset, wgot);
+        ok = false;
+        break;
+      }
+
+      // Read exactly `blk` payload bytes, flushing to flash as they arrive.
+      int remaining = blk;
+      uint32_t rdStart = (uint32_t)xTaskGetTickCount();
+      while (remaining > 0) {
+        int chunk = remaining < (int)sizeof(buf) ? remaining : (int)sizeof(buf);
+        int n = UartDrv::readSim(buf, chunk, 1000);
+        if (n <= 0) {
+          if (pdTICKS_TO_MS(xTaskGetTickCount() - rdStart) > cfg::kOtaSimReadTimeoutMs) break;
+          continue;
+        }
+        if (esp_ota_write(otaHandle, buf, n) != ESP_OK) {
+          ESP_LOGE(TAG, "[OTA] esp_ota_write FAIL @%d", offset);
+          ok = false;
+          break;
+        }
+        remaining -= n;
+        rdStart = (uint32_t)xTaskGetTickCount();
+      }
+      if (!ok) {
+        log.appendf("[SIM] OTA FAIL: write @%d+%d\n", offset, wgot);
+        break;
+      }
+      if (remaining != 0) {
+        ESP_LOGE(TAG, "[OTA] short read @%d+%d: %d left", offset, wgot, remaining);
+        log.appendf("[SIM] OTA FAIL: short read @%d+%d\n", offset, wgot);
+        ok = false;
+        break;
+      }
+      wgot += blk;
+    }
+    if (!ok) break;
+
+    // Consume the trailing "+HTTPREAD: 0" / "OK" that closes the window stream.
+    drainToOk(1000);
+    offset += wgot;
+
+    int pct = (int)((int64_t)offset * 100 / total);
+    if (pct >= lastPct + 10) {
+      lastPct = pct;
+      ESP_LOGI(TAG, "[OTA] %d%% (%d/%d)", pct, offset, total);
+      log.appendf("[SIM] OTA %d%% (%d/%d)\n", pct, offset, total);
+    }
+  }
+
+  httpTermSafe(log);
+
+  if (!ok || offset != total) {
+    esp_ota_abort(otaHandle);
+    ESP_LOGE(TAG, "[OTA] aborted at %d/%d", offset, total);
+    log.appendf("[SIM] OTA aborted %d/%d\n", offset, total);
+    return false;
+  }
+
+  // --- Step 6: Finalize (verifies the written image) + set boot partition ---
+  err = esp_ota_end(otaHandle);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "[OTA] esp_ota_end: %s", esp_err_to_name(err));
+    log.appendf("[SIM] OTA FAIL: end %s\n", esp_err_to_name(err));
+    return false;
+  }
+
+  err = esp_ota_set_boot_partition(part);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "[OTA] set_boot_partition: %s", esp_err_to_name(err));
+    log.appendf("[SIM] OTA FAIL: setboot %s\n", esp_err_to_name(err));
+    return false;
+  }
+
+  ESP_LOGI(TAG, "[OTA] success, boot set to %s", part->label);
+  log.appendf("[SIM] OTA OK -> reboot to %s\n", part->label);
   return true;
 }
 
