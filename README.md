@@ -9,7 +9,7 @@ ESP32-based water level monitoring system with dual connectivity (4G SIM + Wi-Fi
 ## Dashboard
 
 This dashboard is used to collect data from this device.
-Link: [do](https://donuoctrieuduong.xyz/hydro-logger-api/water_monitor.html)
+Link: [donuoctrieuduong.xyz](https://donuoctrieuduong.xyz/hydro-logger-api/water_monitor.html)
 ![Hydro Logger dashboard](dashboard.png)
 
 ## Features
