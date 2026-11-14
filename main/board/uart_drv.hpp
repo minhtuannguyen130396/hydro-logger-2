@@ -7,6 +7,7 @@ public:
   static bool initSimUart();
   static bool initSimUart(int baud);
   static bool initSensorUart();
+  static bool initSensorUart(int tx, int rx, int baud);
   static int writeSim(const uint8_t* data, int len);
   static int writeSensor(const uint8_t* data, int len);
   static int readSim(uint8_t* out, int maxLen, uint32_t timeoutMs);

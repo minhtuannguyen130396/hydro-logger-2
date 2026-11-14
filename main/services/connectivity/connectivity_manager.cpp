@@ -3,8 +3,14 @@
 #include "services/connectivity/dcom_module.hpp"
 #include "common/nvs_store.hpp"
 #include "common/config.hpp"
+#include "middleware/publish_api.hpp"
+#include "modules/rtc/rtc_pcf8563.hpp"
+#include "board/adc_drv.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <cstdio>
+#include <cstring>
+#include <algorithm>
 
 ICommModule* ConnectivityManager::selectPreferred() {
   CommType last = NvsStore::getLastSuccessComm(CommType::Sim4G);
@@ -42,6 +48,19 @@ bool ConnectivityManager::warmup(LogBuffer& log) {
   }
 
   log.appendf("[Conn] preferred FAIL -> switch\n");
+  {
+    LogMsg lm{};
+    RtcPcf8563::instance().getTime(lm.time);
+    lm.meta.voltage_mv = AdcDrv::readMilliVolts();
+    std::snprintf(lm.text, sizeof(lm.text),
+                  "[Conn] Preferred %s FAIL: %s -> switch to %s",
+                  first->type() == CommType::Sim4G ? "SIM" : "WIFI",
+                  first->statusDetail(),
+                  second->type() == CommType::Sim4G ? "SIM" : "WIFI");
+    lm.len = static_cast<uint16_t>(std::min(std::strlen(lm.text), sizeof(lm.text) - 1));
+    PublishApi::publishLog(lm);
+  }
+
   if (tryModule(second, log)) {
     active_ = second;
     NvsStore::setLastSuccessComm(active_->type());
@@ -50,6 +69,18 @@ bool ConnectivityManager::warmup(LogBuffer& log) {
   }
 
   log.appendf("[Conn] both modules FAIL\n");
+  {
+    LogMsg lm{};
+    RtcPcf8563::instance().getTime(lm.time);
+    lm.meta.voltage_mv = AdcDrv::readMilliVolts();
+    std::snprintf(lm.text, sizeof(lm.text),
+                  "[Conn] Both FAIL: %s | %s",
+                  first->statusDetail(),
+                  second->statusDetail());
+    lm.len = static_cast<uint16_t>(std::min(std::strlen(lm.text), sizeof(lm.text) - 1));
+    PublishApi::publishLog(lm);
+  }
+
   active_ = nullptr;
   return false;
 }

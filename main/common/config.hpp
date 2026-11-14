@@ -23,6 +23,10 @@ static constexpr uint32_t kAwakeBudgetMs = 1080000;  // 18 minutes
 // with margin; it still bounds a stalled modem so we can't stay awake forever.
 static constexpr uint32_t kOtaAwakeBudgetMs = 1200000;  // 20 min
 
+// Light-sleep timeout: if the RTC alarm does not fire within this window the
+// device wakes on the timer, measures, and posts immediately.
+static constexpr uint32_t kLightSleepTimeoutMs = 900000;  // 15 minutes
+
 // Measurement
 static constexpr int kDistanceSamples = 3;
 static constexpr int kMaxDistanceMm  = 30000;   // max ultrasonic range ~30m
@@ -37,7 +41,7 @@ static constexpr int kSensorHandshakeRetries = 3;
 
 // Sync
 static constexpr uint32_t kConnCheckTimeoutMs = 60000;
-static constexpr uint32_t kSyncWindowMs = 60000;
+static constexpr uint32_t kSyncWindowMs = 120000;
 static constexpr uint32_t kQueuePopTimeoutMs = 200;
 static constexpr int kSyncSendRetries = CFG_SYNC_SEND_RETRIES;
 static constexpr uint32_t kSimPowerEdgeDelayMs = 100;
@@ -54,6 +58,7 @@ static constexpr uint32_t kDcomPowerEdgeDelayMs = 100;
 static constexpr uint32_t kDcomBootDelayMs = 500;
 static constexpr const char* kDcomWifiSsid = "Minh Tuan";
 static constexpr const char* kDcomWifiPassword = "j12345678";
+
 
 // Queues
 static constexpr int kMeasureQueueLen = 30;

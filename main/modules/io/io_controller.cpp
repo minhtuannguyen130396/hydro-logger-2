@@ -14,7 +14,8 @@ void IoController::init() {
   GpioDrv::initOutput(pins::SPEAKER, false);
 }
 
-void IoController::setLaserPower(bool on)     { GpioDrv::setLevel(pins::LASER_PWR, on); }
+// Laser power is active-low: true = ON (drives pin LOW), false = OFF (drives pin HIGH).
+void IoController::setLaserPower(bool on)     { GpioDrv::setLevel(pins::LASER_PWR, !on); }
 void IoController::setUltrasonicPower(bool on){ GpioDrv::setLevel(pins::ULTRA_PWR, on); }
 void IoController::setSimPower(bool on)       { GpioDrv::setLevel(pins::SIM_PWR, !on); }
 void IoController::setDcomPower(bool on)      { GpioDrv::setLevel(pins::DCOM_PWR, !on); }

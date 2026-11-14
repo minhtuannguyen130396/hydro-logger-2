@@ -2,6 +2,7 @@
 #include "board/pins.hpp"
 
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include <cstring>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -21,6 +22,11 @@ bool initUart(uart_port_t port, int tx, int rx, int baud) {
   }
   if (uart_param_config(port, &cfg) != ESP_OK) return false;
   if (uart_set_pin(port, tx, rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE) != ESP_OK) return false;
+
+  // Bật pull-up nội cho chân RX để tránh chân bị thả nổi (floating) thu nhiễu khi chưa cắm cảm biến
+  if (rx >= 0) {
+    gpio_set_pull_mode((gpio_num_t)rx, GPIO_PULLUP_ONLY);
+  }
   return true;
 }
 
@@ -36,6 +42,10 @@ bool UartDrv::initSimUart(int baud) {
 
 bool UartDrv::initSensorUart() {
   return initUart((uart_port_t)pins::UART_SENSOR_NUM, pins::UART_SENSOR_TX, pins::UART_SENSOR_RX, pins::UART_SENSOR_BAUD);
+}
+
+bool UartDrv::initSensorUart(int tx, int rx, int baud) {
+  return initUart((uart_port_t)pins::UART_SENSOR_NUM, tx, rx, baud);
 }
 
 int UartDrv::writeSim(const uint8_t* data, int len) {

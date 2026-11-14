@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -10,6 +11,9 @@
 #include "app/app_context.hpp"
 #include "middleware/publish_api.hpp"
 #include "modules/rtc/rtc_pcf8563.hpp"
+#include "board/adc_drv.hpp"
+#include "services/connectivity/sim4g_module.hpp"
+#include "services/connectivity/dcom_module.hpp"
 
 static const char* TAG = "FailoverTask";
 
@@ -39,13 +43,19 @@ bool enqueue_failover_request(AppContext* ctx, CommType from, FailoverReason rea
 static void publish_swap_log(const FailoverRequest& req) {
   LogMsg lm{};
   RtcPcf8563::instance().getTime(lm.time);
+  lm.meta.voltage_mv = AdcDrv::readMilliVolts();
+
+  const char* failed_status = (req.from == CommType::Sim4G)
+                                  ? Sim4GModule::instance().statusDetail()
+                                  : DcomModule::instance().statusDetail();
 
   std::snprintf(lm.text, sizeof(lm.text),
-                "[Failover] swap from %s to %s after %s",
+                "[Failover] swap from %s to %s after %s. Cause: %s",
                 comm_name(req.from),
                 comm_name(req.to),
-                reason_name(req.reason));
-  lm.len = static_cast<uint16_t>(std::strlen(lm.text));
+                reason_name(req.reason),
+                failed_status);
+  lm.len = static_cast<uint16_t>(std::min(std::strlen(lm.text), sizeof(lm.text) - 1));
   PublishApi::publishLog(lm);
 }
 

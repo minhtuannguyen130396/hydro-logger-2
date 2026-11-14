@@ -71,12 +71,13 @@ extern "C" void app_main(void) {
   // window to persist the device code to NVS.
   config_console_start();
 
-  // Wake cause decides the boot path:
-  //  - cold boot (power-on / reset / brownout = UNDEFINED): run the full boot
-  //    diagnostic (self-test + connectivity + active data window).
-  //  - RTC alarm (EXT0): we were woken to take a scheduled measurement, so skip
-  //    the diagnostic and go straight into the measure flow. Clear the alarm
-  //    flag first so the RTC releases the INT line (held low until acknowledged).
+  // Wake cause on cold boot (power-on / reset / brownout = UNDEFINED): run
+  // the full boot diagnostic (self-test + connectivity + active data window).
+  //
+  // NOTE: with light-sleep mode the device no longer deep-sleeps between
+  // measurement cycles. Light sleep does not reset the chip, so we only reach
+  // app_main on a true cold boot / reset. The EXT0 branch is kept for safety
+  // in case deep sleep is ever re-enabled, but normally only UNDEFINED fires.
   const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_EXT0) {
     ESP_LOGI(TAG, "woke from RTC alarm (EXT0), skipping diagnostic");

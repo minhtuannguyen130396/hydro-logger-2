@@ -17,9 +17,8 @@ void PowerManager::enterSafeMode() {
   io.setDcomPower(false);
   io.setSpeaker(false);
 
-  // Stop Wi-Fi radio if running
-  esp_wifi_disconnect();
-  esp_wifi_stop();
+  // Fully tear down Wi-Fi before sleeping
+  shutdownWifi();
 
   in_safe_mode_ = true;
   ESP_LOGI(TAG, "entered safe mode (peripherals off)");
@@ -30,6 +29,15 @@ void PowerManager::exitSafeMode() {
 
   in_safe_mode_ = false;
   ESP_LOGI(TAG, "exited safe mode");
+}
+
+void PowerManager::shutdownWifi() {
+  // Best-effort full teardown: disconnect -> stop.
+  // We do NOT call esp_wifi_deinit() because light-sleep preserves memory,
+  // and deinit breaks re-initialization on subsequent wake cycles.
+  esp_wifi_disconnect();
+  esp_wifi_stop();
+  ESP_LOGI(TAG, "Wi-Fi stopped (disconnect + stop)");
 }
 
 void PowerManager::enterDeepSleep(gpio_num_t wake_pin) {
@@ -50,4 +58,45 @@ void PowerManager::enterDeepSleep(gpio_num_t wake_pin) {
   // here (and gpio_hold_dis() early in app_main) to latch those levels.
   ESP_LOGI(TAG, "entering deep sleep, wake on GPIO%d low", (int)wake_pin);
   esp_deep_sleep_start();  // never returns
+}
+
+WakeReason PowerManager::enterLightSleep(gpio_num_t wake_pin, uint32_t timeout_ms) {
+  // Make sure the status LED isn't latched on through sleep.
+  IoController::instance().setLed(false);
+
+  // --- Configure EXT0 wakeup (RTC alarm INT, active-low) ---
+  rtc_gpio_pullup_en(wake_pin);
+  rtc_gpio_pulldown_dis(wake_pin);
+  esp_sleep_enable_ext0_wakeup(wake_pin, 0);  // wake when INT is pulled low
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+
+  // --- Configure timer wakeup ---
+  esp_sleep_enable_timer_wakeup((uint64_t)timeout_ms * 1000ULL);  // µs
+
+  ESP_LOGI(TAG, "entering light sleep, wake on GPIO%d low OR timer %ums",
+           (int)wake_pin, (unsigned)timeout_ms);
+
+  // --- Enter light sleep (blocks until wakeup) ---
+  esp_light_sleep_start();
+
+  // --- Determine wake cause ---
+  const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+
+  WakeReason reason;
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) {
+    reason = WakeReason::RtcAlarm;
+    ESP_LOGI(TAG, "woke from light sleep: RTC alarm (EXT0)");
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    reason = WakeReason::Timeout;
+    ESP_LOGI(TAG, "woke from light sleep: timer timeout (%ums)", (unsigned)timeout_ms);
+  } else {
+    reason = WakeReason::Unknown;
+    ESP_LOGW(TAG, "woke from light sleep: unknown cause %d", (int)cause);
+  }
+
+  // Disable wakeup sources so they don't interfere with future sleep calls
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT0);
+
+  return reason;
 }

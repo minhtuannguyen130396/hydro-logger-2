@@ -22,14 +22,13 @@ void test_gpio() {
   // Test power pins - toggle each one briefly
   TEST_INFO(NAME, "--- Power pin toggle test ---");
 
-  TEST_INFO(NAME, "LASER_PWR (GPIO%d) HIGH", (int)pins::LASER_PWR);
+  TEST_INFO(NAME, "LASER_PWR (GPIO%d) ON (active LOW)", (int)pins::LASER_PWR);
   io.setLaserPower(true);
   testDelayMs(500);
-  TEST_INFO(NAME, "LASER_PWR LOW");
+  TEST_INFO(NAME, "LASER_PWR OFF (idle HIGH)");
   io.setLaserPower(false);
   testDelayMs(200);
-  io.setLaserPower(true); // return to idle HIGH
-  TEST_INFO(NAME, "LASER_PWR idle HIGH");
+  TEST_INFO(NAME, "LASER_PWR idle OFF");
 
   TEST_INFO(NAME, "ULTRA_PWR (GPIO%d) HIGH", (int)pins::ULTRA_PWR);
   io.setUltrasonicPower(true);

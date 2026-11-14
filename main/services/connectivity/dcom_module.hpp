@@ -10,6 +10,7 @@ public:
   bool sendPayload(const std::string& url, const std::string& json, LogBuffer& log) override;
   void powerOff(LogBuffer& log) override;
   CommType type() const override { return CommType::Dcom; }
+  const char* statusDetail() const override;
 
 private:
   DcomModule() = default;

@@ -10,6 +10,8 @@ static const char* LASER_NAME = "LASER";
 
 static const uint8_t kLaserOnCmd[] = {
     0xAA, 0x00, 0x01, 0xBE, 0x00, 0x01, 0x00, 0x01, 0xC1};
+static const uint8_t kLaserOffCmd[] = {
+    0xAA, 0x00, 0x01, 0xBE, 0x00, 0x01, 0x00, 0x00, 0xC0};
 static const uint8_t kLaserDistCmd[] = {
     0xAA, 0x00, 0x00, 0x20, 0x00, 0x01, 0x00, 0x00, 0x21};
 
@@ -27,68 +29,138 @@ static int readLaserFrame(uint8_t* out, int maxLen, uint32_t timeoutMs) {
   return total;
 }
 
+// Find frame header 0xAA in buffer
+static int findLaserHeader(const uint8_t* buf, int len) {
+  for (int i = 0; i < len; i++) {
+    if (buf[i] == 0xAA) return i;
+  }
+  return -1;
+}
+
+// Parse distance (mm) from frame starting with 0xAA header
+static bool parseLaserDistance(const uint8_t* buf, int len, uint32_t& outMm) {
+  for (int i = 0; i <= len - 10; i++) {
+    if (buf[i] == 0xAA) {
+      uint32_t dist = 0;
+      for (int j = 6; j < 10; j++) {
+        dist = (dist << 8) | buf[i + j];
+      }
+      // If dist equals command echo 8448 (0x2100) and more bytes follow, try next frame
+      if (dist == 8448 && (i + 13) <= len) {
+        continue;
+      }
+      outMm = dist;
+      return true;
+    }
+  }
+  return false;
+}
+
 void test_laser() {
   TEST_START(LASER_NAME);
 
   // Init UART1 at laser baud
-  TEST_INFO(LASER_NAME, "Init UART1 baud=%d", pins::UART_SENSOR_LASER_BAUD);
-  // Need to init with laser baud specifically
-  bool uart_ok = UartDrv::initSensorUart();
+  TEST_INFO(LASER_NAME, "Init UART1 baud=%d (TX=GPIO%d, RX=GPIO%d)",
+            pins::UART_SENSOR_LASER_BAUD, pins::UART_LASER_TX, pins::UART_LASER_RX);
+  bool uart_ok = UartDrv::initSensorUart(pins::UART_LASER_TX, pins::UART_LASER_RX, pins::UART_SENSOR_LASER_BAUD);
   if (!uart_ok) {
     TEST_FAIL(LASER_NAME, "UART1 init failed");
     return;
   }
 
-  // Power on (edge trigger)
+  // Pre-discharge: pull HIGH (OFF) for 200ms to ensure clean startup from prior run
+  IoController::instance().setLaserPower(false);
+  testDelayMs(200);
+
+  // Power on (edge trigger HIGH -> LOW)
   TEST_INFO(LASER_NAME, "Power ON (HIGH -> LOW edge)");
   IoController::instance().setLaserPower(true);
-  testDelayMs(100);
-  IoController::instance().setLaserPower(false);
   TEST_INFO(LASER_NAME, "Wait boot 3000ms...");
   testDelayMs(3000);
 
-  // Handshake
+  // Drain any boot noise
   UartDrv::flushSensor();
-  TEST_INFO(LASER_NAME, "Sending ON command...");
-  int written = UartDrv::writeSensor(kLaserOnCmd, sizeof(kLaserOnCmd));
-  if (written != sizeof(kLaserOnCmd)) {
-    TEST_FAIL(LASER_NAME, "UART write failed");
-    IoController::instance().setLaserPower(true);
-    return;
+
+  // Handshake with up to 3 retries
+  bool handshake_ok = false;
+  uint8_t frame[30]{};
+  int rx = 0;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    TEST_INFO(LASER_NAME, "Sending ON command (try %d/3)...", attempt);
+    UartDrv::flushSensor();
+    int written = UartDrv::writeSensor(kLaserOnCmd, sizeof(kLaserOnCmd));
+    if (written != sizeof(kLaserOnCmd)) {
+      TEST_INFO(LASER_NAME, "UART write failed");
+      continue;
+    }
+
+    rx = readLaserFrame(frame, sizeof(frame), 1000);
+    int hdr = findLaserHeader(frame, rx);
+    if (hdr >= 0) {
+      char rawHex[128] = {0};
+      int offset = 0;
+      for (int k = 0; k < rx && k < 16 && offset < (int)sizeof(rawHex) - 4; k++) {
+        offset += snprintf(rawHex + offset, sizeof(rawHex) - offset, "%02X ", frame[k]);
+      }
+      TEST_INFO(LASER_NAME, "Handshake OK (ack header at %d, len=%d) raw: %s", hdr, rx, rawHex);
+      handshake_ok = true;
+      break;
+    }
+    testDelayMs(250);
   }
 
-  uint8_t frame[32]{};
-  int rx = readLaserFrame(frame, sizeof(frame), 1000);
-  if (rx <= 0 || frame[0] != 0xAA) {
+  if (!handshake_ok) {
     TEST_INFO(LASER_NAME, "No ACK received (rx=%d)", rx);
+    if (rx > 0) {
+      char rawHex[128] = {0};
+      int offset = 0;
+      for (int k = 0; k < rx && k < 16 && offset < (int)sizeof(rawHex) - 4; k++) {
+        offset += snprintf(rawHex + offset, sizeof(rawHex) - offset, "%02X ", frame[k]);
+      }
+      TEST_INFO(LASER_NAME, "RX raw: %s", rawHex);
+    }
     TEST_FAIL(LASER_NAME, "Handshake failed - check laser connection");
-    IoController::instance().setLaserPower(true);
+    IoController::instance().setLaserPower(false);
     return;
   }
-  TEST_INFO(LASER_NAME, "Handshake OK (ack len=%d)", rx);
 
   // Read distance 3 times
+  int validReadings = 0;
   for (int i = 0; i < 3; i++) {
     testDelayMs(500);
     UartDrv::flushSensor();
     UartDrv::writeSensor(kLaserDistCmd, sizeof(kLaserDistCmd));
 
     rx = readLaserFrame(frame, sizeof(frame), 1000);
-    if (rx >= 10 && frame[0] == 0xAA) {
-      uint32_t dist = 0;
-      for (int j = 6; j < 10; j++) {
-        dist = (dist << 8) | frame[j];
-      }
+    char rawHex[128] = {0};
+    int offset = 0;
+    for (int k = 0; k < rx && k < 32 && offset < (int)sizeof(rawHex) - 4; k++) {
+      offset += snprintf(rawHex + offset, sizeof(rawHex) - offset, "%02X ", frame[k]);
+    }
+    TEST_INFO(LASER_NAME, "Reading %d raw rx (%d bytes): %s", i + 1, rx, rawHex);
+
+    uint32_t dist = 0;
+    if (parseLaserDistance(frame, rx, dist)) {
       TEST_INFO(LASER_NAME, "Reading %d: distance = %lu mm", i + 1, (unsigned long)dist);
+      validReadings++;
     } else {
-      TEST_INFO(LASER_NAME, "Reading %d: FAIL (rx=%d)", i + 1, rx);
+      TEST_INFO(LASER_NAME, "Reading %d: FAIL parse distance (rx=%d)", i + 1, rx);
     }
   }
 
-  // Power off
+  // Soft power off (turn off laser diode)
+  UartDrv::writeSensor(kLaserOffCmd, sizeof(kLaserOffCmd));
+  testDelayMs(50);
+
+  // Hardware Power off
   TEST_INFO(LASER_NAME, "Power OFF");
-  IoController::instance().setLaserPower(true); // idle HIGH
-  TEST_PASS(LASER_NAME);
+  IoController::instance().setLaserPower(false); // idle OFF (HIGH)
+
+  if (validReadings > 0) {
+    TEST_PASS(LASER_NAME);
+  } else {
+    TEST_FAIL(LASER_NAME, "No valid distance readings");
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -113,8 +185,8 @@ void test_ultrasonic() {
   TEST_START(ULTRA_NAME);
 
   // Init UART1
-  TEST_INFO(ULTRA_NAME, "Init UART1 baud=%d", pins::UART_SENSOR_SUPERSONIC_BAUD);
-  bool uart_ok = UartDrv::initSensorUart();
+  TEST_INFO(ULTRA_NAME, "Init UART1 baud=%d (TX=GPIO%d, RX=GPIO%d)", pins::UART_SENSOR_SUPERSONIC_BAUD, pins::UART_SUPERSONIC_TX, pins::UART_SUPERSONIC_RX);
+  bool uart_ok = UartDrv::initSensorUart(pins::UART_SUPERSONIC_TX, pins::UART_SUPERSONIC_RX, pins::UART_SENSOR_SUPERSONIC_BAUD);
   if (!uart_ok) {
     TEST_FAIL(ULTRA_NAME, "UART1 init failed");
     return;
@@ -190,3 +262,4 @@ void test_ultrasonic() {
   // TEST_INFO(ULTRA_NAME, "Power OFF");
   // IoController::instance().setUltrasonicPower(false);
 }
+

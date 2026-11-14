@@ -8,6 +8,7 @@ public:
   bool warmup(LogBuffer& log) override;
   bool readDistanceMm(int& outMm, LogBuffer& log) override;
   void finishMeasurement(LogBuffer& log) override;
+  bool turnOnByCommand(LogBuffer& log);
   SensorType type() const override { return SensorType::Laser; }
 
 private:

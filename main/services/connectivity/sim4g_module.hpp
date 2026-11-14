@@ -19,6 +19,7 @@ public:
 
   void powerOff(LogBuffer& log) override;
   CommType type() const override { return CommType::Sim4G; }
+  const char* statusDetail() const override;
 
 private:
   Sim4GModule() = default;
@@ -59,4 +60,9 @@ private:
   bool active_{false};
   bool http_inited_{false};
   SimApnProfile active_apn_{SimApnProfile::Vinaphone};
+
+  char status_detail_[192]{"SIM: Chua khoi dong"};
+  char ip_str_[32]{};
+  char carrier_str_[32]{};
+  int rssi_{99};
 };

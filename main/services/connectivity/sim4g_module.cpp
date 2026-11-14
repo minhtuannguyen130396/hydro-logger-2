@@ -16,6 +16,10 @@
 
 static const char* TAG = "SIM";
 
+const char* Sim4GModule::statusDetail() const {
+  return status_detail_;
+}
+
 // ============================================================
 // Anonymous helpers
 // ============================================================
@@ -209,6 +213,10 @@ SimApnProfile Sim4GModule::detectCarrier(LogBuffer& log) {
     if (found_imsi && imsiLine.size() >= 5) {
       log.appendf("[SIM] IMSI: %s\n", imsiLine.c_str());
       if (matchMccMnc(imsiLine.c_str(), detected, carrierName)) {
+        if (carrierName) {
+          std::strncpy(carrier_str_, carrierName, sizeof(carrier_str_) - 1);
+          carrier_str_[sizeof(carrier_str_) - 1] = '\0';
+        }
         ESP_LOGI(TAG, "[CARRIER] carrier=%s APN=%s (via CIMI)", carrierName, apnString(detected));
         log.appendf("[SIM] carrier=%s (via CIMI) -> APN=%s (%s)\n",
                     carrierName, apnName(detected), apnString(detected));
@@ -228,6 +236,10 @@ SimApnProfile Sim4GModule::detectCarrier(LogBuffer& log) {
     if (parseCopsMccMnc(copsLine, mccmnc)) {
       log.appendf("[SIM] COPS MCC/MNC: %s\n", mccmnc.c_str());
       if (matchMccMnc(mccmnc.c_str(), detected, carrierName)) {
+        if (carrierName) {
+          std::strncpy(carrier_str_, carrierName, sizeof(carrier_str_) - 1);
+          carrier_str_[sizeof(carrier_str_) - 1] = '\0';
+        }
         ESP_LOGI(TAG, "[CARRIER] carrier=%s APN=%s (via COPS)", carrierName, apnString(detected));
         log.appendf("[SIM] carrier=%s (via COPS) -> APN=%s (%s)\n",
                     carrierName, apnName(detected), apnString(detected));
@@ -290,6 +302,7 @@ bool Sim4GModule::sendAtOk(const char* cmd, uint32_t timeoutMs, LogBuffer& log) 
 // PHASE 1 — Power on & AT handshake
 // ============================================================
 void Sim4GModule::powerOnHardware(LogBuffer& log) {
+  std::snprintf(status_detail_, sizeof(status_detail_), "SIM: Dang bat nguon phan cung...");
   ESP_LOGI(TAG, "[P1] power ON: GPIO LOW->HIGH edge");
   log.appendf("[SIM] power seq LOW->HIGH\n");
 
@@ -310,6 +323,7 @@ bool Sim4GModule::waitForAtReady(uint32_t timeoutMs, LogBuffer& log) {
   if (!uart_inited) {
     ESP_LOGE(TAG, "[P1] UART init FAIL");
     log.appendf("[SIM] uart init FAIL\n");
+    std::snprintf(status_detail_, sizeof(status_detail_), "SIM: ERROR - Khong khoi tao duoc UART driver");
     return false;
   }
 
@@ -322,6 +336,7 @@ bool Sim4GModule::waitForAtReady(uint32_t timeoutMs, LogBuffer& log) {
       ESP_LOGI(TAG, "[P1] AT ready in %d ms",
                (int)pdTICKS_TO_MS(xTaskGetTickCount() - start));
       log.appendf("[SIM] AT ready\n");
+      std::snprintf(status_detail_, sizeof(status_detail_), "SIM: Giao tiep AT OK (Dang kiem tra the SIM...)");
       return true;
     }
     vTaskDelay(pdMS_TO_TICKS(cfg::kSimAtRetryDelayMs));
@@ -329,6 +344,7 @@ bool Sim4GModule::waitForAtReady(uint32_t timeoutMs, LogBuffer& log) {
 
   ESP_LOGW(TAG, "[P1] AT handshake FAIL after %lu ms", (unsigned long)timeoutMs);
   log.appendf("[SIM] AT handshake FAIL\n");
+  std::snprintf(status_detail_, sizeof(status_detail_), "SIM: ERROR - Khong giao tiep duoc UART/AT (Module SIM khong phan hoi / Timeout)");
   return false;
 }
 
@@ -391,12 +407,19 @@ bool Sim4GModule::checkSimReady(TickType_t deadline, LogBuffer& log) {
   uint32_t tmo = clampTimeout(deadline, 5000);
   if (tmo == 0) {
     ESP_LOGW(TAG, "[P3:SIM_READY] FAIL: no time remaining");
+    std::snprintf(status_detail_, sizeof(status_detail_), "SIM: ERROR - Het thoi gian kiem tra SIM (Timeout)");
     return false;
   }
 
-  if (!sendAtExpect("AT+CPIN?", "READY", tmo, log)) {
+  std::string matched;
+  if (!sendAtExpect("AT+CPIN?", "READY", tmo, log, &matched)) {
     ESP_LOGE(TAG, "[P3:SIM_READY] FAIL: SIM not ready or not inserted");
     log.appendf("[SIM] FAIL at phase SIM_READY\n");
+    if (matched.find("SIM PIN") != std::string::npos || matched.find("SIM PUK") != std::string::npos) {
+      std::snprintf(status_detail_, sizeof(status_detail_), "SIM: ERROR - The SIM bi khoa PIN hoac PUK");
+    } else {
+      std::snprintf(status_detail_, sizeof(status_detail_), "SIM: ERROR - Giao tiep OK nhung khong nhan the SIM (Chua cam the SIM / CPIN error)");
+    }
     return false;
   }
 
@@ -409,6 +432,7 @@ bool Sim4GModule::waitLteRegistration(TickType_t deadline, LogBuffer& log) {
   ESP_LOGI(TAG, "[P3:LTE_REG] waiting for network registration ...");
   log.appendf("[SIM] phase: LTE_REGISTER\n");
 
+  int last_stat = -1;
   while (msRemaining(deadline) > 0) {
     std::string matched;
     uint32_t tmo = clampTimeout(deadline, 3000);
@@ -417,6 +441,7 @@ bool Sim4GModule::waitLteRegistration(TickType_t deadline, LogBuffer& log) {
     if (sendAtExpect("AT+CEREG?", "+CEREG:", tmo, log, &matched)) {
       int stat = -1;
       if (parseCeregStat(matched, stat)) {
+        last_stat = stat;
         log.appendf("[SIM] CEREG stat=%d (%s)\n", stat, regStatStr(stat));
 
         if (stat == 1 || stat == 5) {
@@ -425,6 +450,7 @@ bool Sim4GModule::waitLteRegistration(TickType_t deadline, LogBuffer& log) {
           if (sendAtExpect("AT+CSQ", "+CSQ:", 2000, log, &csqLine)) {
             int rssi = 99;
             if (parseCsqRssi(csqLine, rssi)) {
+              rssi_ = rssi;
               int dbm = (rssi == 99) ? 0 : (-113 + rssi * 2);
               log.appendf("[SIM] signal rssi=%d (%ddBm)\n", rssi, dbm);
             }
@@ -436,6 +462,8 @@ bool Sim4GModule::waitLteRegistration(TickType_t deadline, LogBuffer& log) {
         if (stat == 3) {
           ESP_LOGE(TAG, "[P3:LTE_REG] DENIED");
           log.appendf("[SIM] FAIL at phase LTE_REGISTER: denied\n");
+          std::snprintf(status_detail_, sizeof(status_detail_),
+                        "SIM: ERROR - Dang ky mang bi tu choi (CEREG registration denied)");
           return false;
         }
       }
@@ -445,6 +473,9 @@ bool Sim4GModule::waitLteRegistration(TickType_t deadline, LogBuffer& log) {
 
   ESP_LOGW(TAG, "[P3:LTE_REG] FAIL: timeout waiting for registration");
   log.appendf("[SIM] FAIL at phase LTE_REGISTER: timeout\n");
+  std::snprintf(status_detail_, sizeof(status_detail_),
+                "SIM: ERROR - Nhan the SIM nhung khong dang ky duoc mang LTE (CEREG timeout, stat=%d: %s)",
+                last_stat, regStatStr(last_stat));
   return false;
 }
 
@@ -541,7 +572,17 @@ bool Sim4GModule::verifyDataReady(TickType_t deadline, LogBuffer& log) {
     if (addrLine.find("0.0.0.0") != std::string::npos) {
       ESP_LOGW(TAG, "[P3:VERIFY] FAIL: IP is 0.0.0.0");
       log.appendf("[SIM] FAIL at phase VERIFY_DATA: no IP\n");
+      std::snprintf(status_detail_, sizeof(status_detail_), "SIM: ERROR - Khong nhan duoc IP hop le (IP: 0.0.0.0)");
       return false;
+    }
+    size_t q1 = addrLine.find('"');
+    size_t q2 = (q1 != std::string::npos) ? addrLine.find('"', q1 + 1) : std::string::npos;
+    if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+      std::string ip = addrLine.substr(q1 + 1, q2 - q1 - 1);
+      std::strncpy(ip_str_, ip.c_str(), sizeof(ip_str_) - 1);
+      ip_str_[sizeof(ip_str_) - 1] = '\0';
+    } else {
+      std::strncpy(ip_str_, "Assigned", sizeof(ip_str_) - 1);
     }
     log.appendf("[SIM] IP: %s\n", addrLine.c_str());
   }
@@ -573,6 +614,7 @@ bool Sim4GModule::checkInternet(uint32_t timeoutMs, LogBuffer& log) {
   if (!active_) {
     ESP_LOGW(TAG, "checkInternet: module not active (powerOn not called?)");
     log.appendf("[SIM] module not active\n");
+    std::snprintf(status_detail_, sizeof(status_detail_), "SIM: ERROR - Module SIM chua duoc bat nguon");
     return false;
   }
 
@@ -593,6 +635,11 @@ bool Sim4GModule::checkInternet(uint32_t timeoutMs, LogBuffer& log) {
     ESP_LOGI(TAG, "=== checkInternet OK (APN=%s, %lu ms remaining) ===",
              apnName(first), (unsigned long)msRemaining(deadline));
     log.appendf("[SIM] network ready APN=%s\n", apnName(first));
+    std::snprintf(status_detail_, sizeof(status_detail_),
+                  "SIM: OK (Nha mang: %s, APN: %s, CSQ: %d, IP: %s)",
+                  carrier_str_[0] ? carrier_str_ : "Unknown",
+                  apnName(first), rssi_,
+                  ip_str_[0] ? ip_str_ : "OK");
     return true;
   }
 
@@ -607,11 +654,19 @@ bool Sim4GModule::checkInternet(uint32_t timeoutMs, LogBuffer& log) {
     ESP_LOGI(TAG, "=== checkInternet OK (APN=%s, %lu ms remaining) ===",
              apnName(second), (unsigned long)msRemaining(deadline));
     log.appendf("[SIM] network ready APN=%s\n", apnName(second));
+    std::snprintf(status_detail_, sizeof(status_detail_),
+                  "SIM: OK (Nha mang: %s, APN: %s, CSQ: %d, IP: %s)",
+                  carrier_str_[0] ? carrier_str_ : "Unknown",
+                  apnName(second), rssi_,
+                  ip_str_[0] ? ip_str_ : "OK");
     return true;
   }
 
   ESP_LOGE(TAG, "=== checkInternet FAIL (both APNs, budget exhausted) ===");
   log.appendf("[SIM] checkInternet FAIL: both APNs failed\n");
+  std::snprintf(status_detail_, sizeof(status_detail_),
+                "SIM: ERROR - Dang ky mang LTE OK nhung khong ket noi duoc APN/Data (%s, %s)",
+                apnName(first), apnName(second));
   return false;
 }
 

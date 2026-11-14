@@ -7,6 +7,7 @@
 
 #include "modules/rtc/rtc_pcf8563.hpp"
 #include "modules/sensor/sensor_manager.hpp"
+#include "modules/sensor/laser_sensor.hpp"
 #include "modules/io/io_controller.hpp"
 #include "services/connectivity/connectivity_manager.hpp"
 #include "services/connectivity/dcom_module.hpp"
@@ -15,6 +16,7 @@
 #include "services/net/server_api.hpp"
 #include "services/pack/json_packer.hpp"
 #include "services/ota/ota_service.hpp"
+#include "middleware/publish_api.hpp"
 #include "board/adc_drv.hpp"
 #include "common/config.hpp"
 #include "common/nvs_store.hpp"
@@ -151,6 +153,17 @@ static bool fetch_and_sync_time(ICommModule* module, LogBuffer& log) {
 
 #include "board/pins.hpp"
 
+/// Turn on laser sensor via command (UART command kLaserOnCommand, not IO power pin)
+static bool turn_on_laser_sensor_by_command(LogBuffer& log) {
+#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+  ESP_LOGI(TAG, "[Diag] turn on laser sensor via command");
+  return LaserSensor::instance().turnOnByCommand(log);
+#else
+  (void)log;
+  return true;
+#endif
+}
+
 static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
   if (!module) return false;
 
@@ -164,7 +177,9 @@ static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
   if (sm.ensureReady(active, log)) {
     int out[cfg::kDistanceSamples]{};
     ok = sm.read3(active, out, log);
+#if PINS_UART1_DEVICE != PINS_UART1_DEVICE_LASER
     active->finishMeasurement(log);
+#endif
     for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
   } else {
     ESP_LOGW(TAG, "[Portal] water_level measure FAIL (sensor warmup failed)");
@@ -237,6 +252,24 @@ static void diag_ota_check(ICommModule* module, LogBuffer& log) {
   // false = up-to-date or this boot's attempt failed; sync cycle retries later.
   ESP_LOGI(TAG, "[OTA] no update applied");
   log.appendf("[OTA] no update applied\n");
+}
+
+static void send_diagnostic_status_log(ICommModule* module, const LogMsg& lm, LogBuffer& log) {
+  if (!module) return;
+
+  std::string json = JsonPacker::packLog(lm);
+  ESP_LOGI(TAG, "[Diag] POSTing diagnostic status log: %s", json.c_str());
+  log.appendf("[Diag] POSTing diagnostic status log: %s\n", json.c_str());
+
+  bool sent = false;
+  if (module->type() == CommType::Sim4G) {
+    sent = module->sendPayload(ServerApi::logUrl(), json, log);
+  } else {
+    sent = ServerApi::sendLog(json, log);
+  }
+
+  ESP_LOGI(TAG, "[Diag] status log send result: %s", sent ? "SUCCESS" : "FAIL");
+  log.appendf("[Diag] status log send result: %s\n", sent ? "SUCCESS" : "FAIL");
 }
 
 static void send_firmware_version_info(ICommModule* module, LogBuffer& log) {
@@ -338,6 +371,22 @@ static void diagnostic_task_fn(void* arg) {
   test_sensor();
   DiagConnResult diag = test_connectivity();
 
+  const char* wifi_status = DcomModule::instance().statusDetail();
+  const char* sim_status  = Sim4GModule::instance().statusDetail();
+
+  ESP_LOGI(TAG, "[Diagnostic] %s", wifi_status);
+  ESP_LOGI(TAG, "[Diagnostic] %s", sim_status);
+
+  LogMsg diag_lm{};
+  RtcPcf8563::instance().getTime(diag_lm.time);
+  diag_lm.meta.voltage_mv = AdcDrv::readMilliVolts();
+  std::snprintf(diag_lm.text, sizeof(diag_lm.text),
+                "[Diagnostic] %s | %s",
+                wifi_status, sim_status);
+  diag_lm.len = static_cast<uint16_t>(std::min(std::strlen(diag_lm.text), sizeof(diag_lm.text) - 1));
+
+  PublishApi::publishLog(diag_lm);
+
   ESP_LOGI(TAG, "========== BOOT DIAGNOSTIC END ==========");
 
   // ========================================================
@@ -360,10 +409,12 @@ static void diagnostic_task_fn(void* arg) {
     if (diag.dcom_ok) {
       active = &DcomModule::instance();              // Wi-Fi stays up the whole window
       active_name = "DCOM";
+      NvsStore::setLastSuccessComm(CommType::Dcom);
       if (diag.sim_ok) Sim4GModule::instance().powerOff(log);  // unused on this path
     } else if (diag.sim_ok) {
       active = &Sim4GModule::instance();
       active_name = "SIM4G";
+      NvsStore::setLastSuccessComm(CommType::Sim4G);
     }
   }
 
@@ -387,8 +438,10 @@ static void diagnostic_task_fn(void* arg) {
         LogBuffer log = LogService::createSessionLog();
 
         measure_and_send_water_level(active, log);  // bắn dữ liệu mực nước
+        turn_on_laser_sensor_by_command(log);       // bật cảm biến laser bằng command
         fetch_and_sync_time(active, log);           // sync time
         if (first_cycle) {
+          send_diagnostic_status_log(active, diag_lm, log);
           send_firmware_version_info(active, log);  // report current fw to dashboard
         }
         diag_ota_check(active, log);                // check fw-version + OTA (may restart)
@@ -400,6 +453,9 @@ static void diagnostic_task_fn(void* arg) {
 
     LogBuffer log = LogService::createSessionLog();
     active->powerOff(log);
+#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+    LaserSensor::instance().finishMeasurement(log);
+#endif
   } else {
     ESP_LOGW(TAG, "[Diag] no comm module reached internet, skipping active window");
   }

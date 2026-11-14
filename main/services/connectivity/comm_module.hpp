@@ -11,4 +11,5 @@ public:
   virtual bool sendPayload(const std::string& url, const std::string& json, LogBuffer& log) = 0;
   virtual void powerOff(LogBuffer& log) = 0;
   virtual CommType type() const = 0;
+  virtual const char* statusDetail() const = 0;
 };
