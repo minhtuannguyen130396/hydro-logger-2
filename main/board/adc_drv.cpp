@@ -7,8 +7,8 @@
 
 static const char* TAG = "AdcDrv";
 static adc_oneshot_unit_handle_t s_unit{};
-static adc_channel_t s_chan{};          // battery voltage (GPIO39 / ADC1_CH3)
-static adc_channel_t s_lsignal_chan{};  // analog pressure (GPIO35 / ADC1_CH7)
+static adc_channel_t s_chan{};          // battery voltage (GPIO34 / ADC1_CH6)
+static adc_channel_t s_lsignal_chan{};  // analog pressure (optional)
 
 bool AdcDrv::init() {
   adc_oneshot_unit_init_cfg_t cfg = {
@@ -18,8 +18,7 @@ bool AdcDrv::init() {
   };
   if (adc_oneshot_new_unit(&cfg, &s_unit) != ESP_OK) return false;
 
-  // NOTE: mapping pins::ADC_CHAN -> adc_channel_t is chip-dependent.
-  // Here we assume ADC1 channel number equals pins::ADC_CHAN (placeholder).
+  // Battery voltage channel (GPIO 34 / ADC1_CH6)
   s_chan = (adc_channel_t)pins::ADC_CHAN;
 
   adc_oneshot_chan_cfg_t ccfg = {
@@ -28,9 +27,11 @@ bool AdcDrv::init() {
   };
   if (adc_oneshot_config_channel(s_unit, s_chan, &ccfg) != ESP_OK) return false;
 
-  // L_SIGNAL channel for the analog pressure sensor (GPIO35 / ADC1_CH7).
-  s_lsignal_chan = (adc_channel_t)pins::L_SIGNAL_ADC_CHAN;
-  if (adc_oneshot_config_channel(s_unit, s_lsignal_chan, &ccfg) != ESP_OK) return false;
+  // L_SIGNAL channel for analog pressure sensor (if configured)
+  if (pins::L_SIGNAL != GPIO_NUM_NC && pins::L_SIGNAL_ADC_CHAN >= 0) {
+    s_lsignal_chan = (adc_channel_t)pins::L_SIGNAL_ADC_CHAN;
+    if (adc_oneshot_config_channel(s_unit, s_lsignal_chan, &ccfg) != ESP_OK) return false;
+  }
 
   ESP_LOGI(TAG, "ADC init ok");
   return true;

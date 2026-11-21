@@ -17,4 +17,8 @@ public:
 
 private:
   IoController() = default;
+  void updateSharedPower();
+
+  bool laser_on_{false};
+  bool dcom_on_{false};
 };

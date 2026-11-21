@@ -29,15 +29,16 @@ static const char* reason_name(FailoverReason reason) {
   }
 }
 
-static CommType other_comm(CommType t) {
-  return (t == CommType::Sim4G) ? CommType::Dcom : CommType::Sim4G;
-}
+// Hardware does not have a SIM module. CommType is always Dcom.
+// static CommType other_comm(CommType t) { ... } (unused)
 
 bool enqueue_failover_request(AppContext* ctx, CommType from, FailoverReason reason) {
-  if (!ctx || !ctx->failover_q) return false;
-
-  const FailoverRequest req{from, other_comm(from), reason};
-  return xQueueOverwrite(ctx->failover_q, &req) == pdTRUE;
+  (void)ctx;
+  (void)from;
+  (void)reason;
+  // Hardware does not have a SIM module. Only DCOM 4G is used, so no failover is possible.
+  ESP_LOGW(TAG, "Failover request ignored: SIM module is disabled in hardware (DCOM only)");
+  return false;
 }
 
 static void publish_swap_log(const FailoverRequest& req) {
@@ -72,11 +73,11 @@ extern "C" void failover_task_entry(void* arg) {
       continue;
     }
 
-    ESP_LOGI(TAG, "swap preference %s -> %s (%s)",
+    ESP_LOGI(TAG, "swap preference %s -> %s (%s) [enforced DCOM]",
              comm_name(req.from),
              comm_name(req.to),
              reason_name(req.reason));
-    NvsStore::setLastSuccessComm(req.to);
+    NvsStore::setLastSuccessComm(CommType::Dcom);
     publish_swap_log(req);
   }
 }

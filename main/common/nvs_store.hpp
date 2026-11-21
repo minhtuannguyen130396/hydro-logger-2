@@ -9,7 +9,7 @@ public:
   static bool init();
 
   // Connectivity preferences
-  static CommType getLastSuccessComm(CommType def = CommType::Sim4G);
+  static CommType getLastSuccessComm(CommType def = CommType::Dcom);
   static void setLastSuccessComm(CommType t);
 
   static SimApnProfile getLastSimApn(SimApnProfile def = SimApnProfile::Vinaphone);

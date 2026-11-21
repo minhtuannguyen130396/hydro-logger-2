@@ -56,6 +56,10 @@ static constexpr const char* kSimApnViettel = "v-internet";
 static constexpr const char* kSimApnVinaphone = "m3-world";
 static constexpr uint32_t kDcomPowerEdgeDelayMs = 100;
 static constexpr uint32_t kDcomBootDelayMs = 500;
+// Wi-Fi credentials
+// Backup Wi-Fi:
+// static constexpr const char* kDcomWifiSsidBackup = "Tầng 2";
+// static constexpr const char* kDcomWifiPasswordBackup = "66668888";
 static constexpr const char* kDcomWifiSsid = "Minh Tuan";
 static constexpr const char* kDcomWifiPassword = "j12345678";
 

@@ -22,31 +22,39 @@ void test_gpio() {
   // Test power pins - toggle each one briefly
   TEST_INFO(NAME, "--- Power pin toggle test ---");
 
-  TEST_INFO(NAME, "LASER_PWR (GPIO%d) ON (active LOW)", (int)pins::LASER_PWR);
-  io.setLaserPower(true);
-  testDelayMs(500);
-  TEST_INFO(NAME, "LASER_PWR OFF (idle HIGH)");
-  io.setLaserPower(false);
-  testDelayMs(200);
-  TEST_INFO(NAME, "LASER_PWR idle OFF");
+  if (pins::LASER_PWR != GPIO_NUM_NC) {
+    TEST_INFO(NAME, "LASER_PWR (GPIO%d) ON (active LOW)", (int)pins::LASER_PWR);
+    io.setLaserPower(true);
+    testDelayMs(500);
+    TEST_INFO(NAME, "LASER_PWR OFF (idle HIGH)");
+    io.setLaserPower(false);
+    testDelayMs(200);
+    TEST_INFO(NAME, "LASER_PWR idle OFF");
+  }
 
-  TEST_INFO(NAME, "ULTRA_PWR (GPIO%d) HIGH", (int)pins::ULTRA_PWR);
-  io.setUltrasonicPower(true);
-  testDelayMs(500);
-  io.setUltrasonicPower(false);
-  TEST_INFO(NAME, "ULTRA_PWR idle LOW");
+  if (pins::ULTRA_PWR != GPIO_NUM_NC) {
+    TEST_INFO(NAME, "ULTRA_PWR (GPIO%d) HIGH", (int)pins::ULTRA_PWR);
+    io.setUltrasonicPower(true);
+    testDelayMs(500);
+    io.setUltrasonicPower(false);
+    TEST_INFO(NAME, "ULTRA_PWR idle LOW");
+  }
 
-  TEST_INFO(NAME, "SIM_PWR (GPIO%d) LOW (pulse)", (int)pins::SIM_PWR);
-  io.setSimPower(false); // active edge
-  testDelayMs(200);
-  io.setSimPower(true);  // idle HIGH
-  TEST_INFO(NAME, "SIM_PWR idle HIGH");
+  if (pins::SIM_PWR != GPIO_NUM_NC) {
+    TEST_INFO(NAME, "SIM_PWR (GPIO%d) LOW (pulse)", (int)pins::SIM_PWR);
+    io.setSimPower(false); // active edge
+    testDelayMs(200);
+    io.setSimPower(true);  // idle HIGH
+    TEST_INFO(NAME, "SIM_PWR idle HIGH");
+  }
 
-  TEST_INFO(NAME, "DCOM_PWR (GPIO%d) HIGH", (int)pins::DCOM_PWR);
-  io.setDcomPower(true);
-  testDelayMs(500);
-  io.setDcomPower(false);
-  TEST_INFO(NAME, "DCOM_PWR idle LOW");
+  if (pins::DCOM_PWR != GPIO_NUM_NC) {
+    TEST_INFO(NAME, "DCOM_PWR (GPIO%d) ON", (int)pins::DCOM_PWR);
+    io.setDcomPower(true);
+    testDelayMs(500);
+    io.setDcomPower(false);
+    TEST_INFO(NAME, "DCOM_PWR idle OFF");
+  }
 
   TEST_INFO(NAME, "All power pins returned to idle state");
   TEST_PASS(NAME);

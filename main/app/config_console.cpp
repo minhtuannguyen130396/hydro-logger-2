@@ -1,18 +1,22 @@
 // Runtime configuration console.
 //
-// Reads simple "key:value" commands from the console UART (the same UART used by
-// idf.py monitor, see CONFIG_ESP_CONSOLE_UART_NUM) and applies them on the fly.
+// Reads simple "key:value" commands from UART0 and applies them on the fly.
 // Started once from app_main and kept alive for the whole awake period, so the
 // operator can configure the unit by typing into the serial monitor.
+//
+// Works independently of ESP-IDF console logging status (even if CONFIG_ESP_CONSOLE_NONE=y
+// or all logs are disabled, UART0 is initialized directly for command I/O).
 //
 // Supported commands (one per line, terminated by Enter):
 //   serial_number:TD_MW_0012   -> parse the trailing digits as the device code
 //                                 ("mã máy") and persist it to NVS. The serial is
 //                                 rebuilt from cfg::kDeviceSerialPrefix + code, so
 //                                 it round-trips back to e.g. "TD_MW_0012".
+//   serial_number?             -> query current serial number and code.
 #include "common/config.hpp"
 #include "common/nvs_store.hpp"
 
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -28,12 +32,8 @@ static const char* TAG = "ConfigConsole";
 
 namespace {
 
-// The console lives on the default UART (CONFIG_ESP_CONSOLE_UART_NUM, =0 here).
-#if defined(CONFIG_ESP_CONSOLE_UART_NUM)
-constexpr uart_port_t kConsoleUart = (uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM;
-#else
+// Luon su dung UART0 bat ke che do console logging cua he thong bat hay tat
 constexpr uart_port_t kConsoleUart = UART_NUM_0;
-#endif
 
 constexpr size_t kMaxLineLen = 128;
 
@@ -65,6 +65,11 @@ bool parseSerialCode(const std::string& value, uint16_t& code) {
 void handleSerialNumber(const std::string& value) {
   uint16_t code = 0;
   if (!parseSerialCode(value, code)) {
+    char errResp[128];
+    int len = std::snprintf(errResp, sizeof(errResp),
+                            "[ERR] serial_number: invalid value '%s' (expected e.g. TD_MW_0012)\r\n",
+                            value.c_str());
+    uart_write_bytes(kConsoleUart, errResp, len);
     ESP_LOGW(TAG, "serial_number: invalid value '%s' (expected e.g. TD_MW_0012)",
              value.c_str());
     return;
@@ -75,6 +80,11 @@ void handleSerialNumber(const std::string& value) {
   std::string v = trim(value);
   const size_t pfxLen = std::strlen(cfg::kDeviceSerialPrefix);
   if (v.compare(0, pfxLen, cfg::kDeviceSerialPrefix) != 0) {
+    char warnResp[128];
+    int len = std::snprintf(warnResp, sizeof(warnResp),
+                            "[WARN] prefix '%.*s' != '%s'; code %u will be saved with prefix '%s'\r\n",
+                            (int)pfxLen, v.c_str(), cfg::kDeviceSerialPrefix, (unsigned)code, cfg::kDeviceSerialPrefix);
+    uart_write_bytes(kConsoleUart, warnResp, len);
     ESP_LOGW(TAG, "serial_number: prefix '%.*s' != '%s'; only the code is stored",
              (int)pfxLen, v.c_str(), cfg::kDeviceSerialPrefix);
   }
@@ -83,8 +93,13 @@ void handleSerialNumber(const std::string& value) {
 
   char readback[32]{};
   NvsStore::getDeviceSerial(readback, sizeof(readback));
+  char okResp[128];
+  int len = std::snprintf(okResp, sizeof(okResp),
+                          "[OK] serial_number = %s (code=%u)\r\n",
+                          readback, (unsigned)code);
+  uart_write_bytes(kConsoleUart, okResp, len);
+  std::printf("%s", okResp);
   ESP_LOGI(TAG, "serial_number saved -> %s (code=%u)", readback, (unsigned)code);
-  std::printf("[OK] serial_number = %s (code=%u)\r\n", readback, (unsigned)code);
 }
 
 void handleLine(const std::string& rawLine) {
@@ -93,30 +108,73 @@ void handleLine(const std::string& rawLine) {
 
   size_t colon = line.find(':');
   if (colon == std::string::npos) {
-    return;  // not a key:value command — ignore quietly
+    colon = line.find('=');
   }
 
-  std::string cmd = trim(line.substr(0, colon));
-  std::string val = trim(line.substr(colon + 1));
-
-  if (cmd == "serial_number") {
-    handleSerialNumber(val);
+  std::string cmd;
+  std::string val;
+  if (colon != std::string::npos) {
+    cmd = trim(line.substr(0, colon));
+    val = trim(line.substr(colon + 1));
   } else {
+    size_t space = line.find(' ');
+    if (space != std::string::npos) {
+      cmd = trim(line.substr(0, space));
+      val = trim(line.substr(space + 1));
+    } else {
+      cmd = line;
+    }
+  }
+
+  if (cmd == "serial_number" || cmd == "serial") {
+    if (val.empty() || val == "?") {
+      char readback[32]{};
+      NvsStore::getDeviceSerial(readback, sizeof(readback));
+      uint16_t code = NvsStore::getDeviceCode(cfg::kDefaultDeviceCode);
+      char resp[128];
+      int n = std::snprintf(resp, sizeof(resp),
+                            "[CURRENT] serial_number = %s (code=%u)\r\n",
+                            readback, (unsigned)code);
+      uart_write_bytes(kConsoleUart, resp, n);
+    } else {
+      handleSerialNumber(val);
+    }
+  } else {
+    char unk[128];
+    int n = std::snprintf(unk, sizeof(unk),
+                          "[ERR] unknown command '%s' (try 'serial_number:TD_MW_0012')\r\n",
+                          cmd.c_str());
+    uart_write_bytes(kConsoleUart, unk, n);
     ESP_LOGW(TAG, "unknown command '%s'", cmd.c_str());
   }
 }
 
 void console_task(void*) {
-  // Install the UART driver on the console port so we can read keystrokes. Log
-  // output continues to flow through the standard console write path unaffected.
+  // Khoi tao UART0 driver truc tiep neu he thong tat UART console logging (CONFIG_ESP_CONSOLE_NONE)
   if (!uart_is_driver_installed(kConsoleUart)) {
-    if (uart_driver_install(kConsoleUart, 256, 0, 0, nullptr, 0) != ESP_OK) {
-      ESP_LOGW(TAG, "uart_driver_install failed, console disabled");
+    uart_config_t uart_cfg{};
+    uart_cfg.baud_rate = 115200;
+    uart_cfg.data_bits = UART_DATA_8_BITS;
+    uart_cfg.parity    = UART_PARITY_DISABLE;
+    uart_cfg.stop_bits = UART_STOP_BITS_1;
+    uart_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    uart_cfg.source_clk = UART_SCLK_DEFAULT;
+
+    esp_err_t err = uart_param_config(kConsoleUart, &uart_cfg);
+    if (err == ESP_OK) {
+      uart_set_pin(kConsoleUart, GPIO_NUM_1, GPIO_NUM_3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+      err = uart_driver_install(kConsoleUart, 512, 512, 0, nullptr, 0);
+    }
+
+    if (err != ESP_OK) {
+      ESP_LOGW(TAG, "uart_driver_install failed err=%d, console disabled", (int)err);
       vTaskDelete(nullptr);
       return;
     }
   }
 
+  const char* prompt = "\r\n[ConfigConsole] UART0 active - type 'serial_number:TD_MW_0012' to configure\r\n";
+  uart_write_bytes(kConsoleUart, prompt, std::strlen(prompt));
   ESP_LOGI(TAG, "ready - type 'serial_number:TD_MW_0012' to set device code");
 
   std::string line;
@@ -126,12 +184,19 @@ void console_task(void*) {
     if (n != 1) continue;
 
     if (ch == '\r' || ch == '\n') {
+      const char* crlf = "\r\n";
+      uart_write_bytes(kConsoleUart, crlf, 2);
       handleLine(line);
       line.clear();
     } else if (ch == 0x08 || ch == 0x7f) {  // backspace / delete
-      if (!line.empty()) line.pop_back();
-    } else if (line.size() < kMaxLineLen) {
+      if (!line.empty()) {
+        line.pop_back();
+        const char* bs = "\b \b";
+        uart_write_bytes(kConsoleUart, bs, 3);
+      }
+    } else if (line.size() < kMaxLineLen && std::isprint(ch)) {
       line.push_back((char)ch);
+      uart_write_bytes(kConsoleUart, &ch, 1);  // local echo
     }
   }
 }

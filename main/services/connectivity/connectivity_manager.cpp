@@ -13,15 +13,12 @@
 #include <algorithm>
 
 ICommModule* ConnectivityManager::selectPreferred() {
-  CommType last = NvsStore::getLastSuccessComm(CommType::Sim4G);
-  return (last == CommType::Sim4G) ? (ICommModule*)&Sim4GModule::instance()
-                                  : (ICommModule*)&DcomModule::instance();
+  return (ICommModule*)&DcomModule::instance();
 }
 
 ICommModule* ConnectivityManager::other(ICommModule* m) {
-  if (!m) return (ICommModule*)&Sim4GModule::instance();
-  return (m->type() == CommType::Sim4G) ? (ICommModule*)&DcomModule::instance()
-                                       : (ICommModule*)&Sim4GModule::instance();
+  (void)m;
+  return nullptr;
 }
 
 bool ConnectivityManager::tryModule(ICommModule* m, LogBuffer& log) {
@@ -35,48 +32,25 @@ bool ConnectivityManager::tryModule(ICommModule* m, LogBuffer& log) {
 }
 
 bool ConnectivityManager::warmup(LogBuffer& log) {
-  ICommModule* first = selectPreferred();
-  ICommModule* second = other(first);
+  ICommModule* mod = selectPreferred();
 
-  log.appendf("[Conn] preferred=%s\n", first->type()==CommType::Sim4G ? "SIM4G":"DCOM");
+  log.appendf("[Conn] module=DCOM (SIM disabled in hardware)\n");
 
-  if (tryModule(first, log)) {
-    active_ = first;
+  if (tryModule(mod, log)) {
+    active_ = mod;
     NvsStore::setLastSuccessComm(active_->type());
-    log.appendf("[Conn] active=%s (saved)\n", active_->type()==CommType::Sim4G ? "SIM4G":"DCOM");
+    log.appendf("[Conn] active=DCOM (saved)\n");
     return true;
   }
 
-  log.appendf("[Conn] preferred FAIL -> switch\n");
+  log.appendf("[Conn] DCOM FAIL: %s\n", mod->statusDetail());
   {
     LogMsg lm{};
     RtcPcf8563::instance().getTime(lm.time);
     lm.meta.voltage_mv = AdcDrv::readMilliVolts();
     std::snprintf(lm.text, sizeof(lm.text),
-                  "[Conn] Preferred %s FAIL: %s -> switch to %s",
-                  first->type() == CommType::Sim4G ? "SIM" : "WIFI",
-                  first->statusDetail(),
-                  second->type() == CommType::Sim4G ? "SIM" : "WIFI");
-    lm.len = static_cast<uint16_t>(std::min(std::strlen(lm.text), sizeof(lm.text) - 1));
-    PublishApi::publishLog(lm);
-  }
-
-  if (tryModule(second, log)) {
-    active_ = second;
-    NvsStore::setLastSuccessComm(active_->type());
-    log.appendf("[Conn] active=%s (saved)\n", active_->type()==CommType::Sim4G ? "SIM4G":"DCOM");
-    return true;
-  }
-
-  log.appendf("[Conn] both modules FAIL\n");
-  {
-    LogMsg lm{};
-    RtcPcf8563::instance().getTime(lm.time);
-    lm.meta.voltage_mv = AdcDrv::readMilliVolts();
-    std::snprintf(lm.text, sizeof(lm.text),
-                  "[Conn] Both FAIL: %s | %s",
-                  first->statusDetail(),
-                  second->statusDetail());
+                  "[Conn] DCOM FAIL: %s",
+                  mod->statusDetail());
     lm.len = static_cast<uint16_t>(std::min(std::strlen(lm.text), sizeof(lm.text) - 1));
     PublishApi::publishLog(lm);
   }

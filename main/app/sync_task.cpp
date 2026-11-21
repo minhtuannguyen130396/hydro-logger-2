@@ -165,7 +165,7 @@ extern "C" void sync_task_entry(void* arg) {
     // --- Step 1: Single connectivity warmup (only place that powers ON) ---
     bool conn_ok = cm.warmup(log);
     if (!conn_ok) {
-      const CommType preferred = NvsStore::getLastSuccessComm(CommType::Sim4G);
+      const CommType preferred = NvsStore::getLastSuccessComm(CommType::Dcom);
       enqueue_failover_request(ctx, preferred, FailoverReason::SyncWarmupFail);
       ctx->state.clear(AppState::BIT_CONN_OK);
       ctx->state.set(AppState::BIT_CONN_FAIL | AppState::BIT_LAST_SYNC_FAIL);

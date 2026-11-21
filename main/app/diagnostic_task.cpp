@@ -18,6 +18,7 @@
 #include "services/ota/ota_service.hpp"
 #include "middleware/publish_api.hpp"
 #include "board/adc_drv.hpp"
+#include "board/pins.hpp"
 #include "common/config.hpp"
 #include "common/nvs_store.hpp"
 #include "common/time_utils.hpp"
@@ -36,6 +37,17 @@ struct DiagConnResult {
 // ============================================================
 // Individual diagnostic tests
 // ============================================================
+
+/// Turn on laser sensor via command (UART command kLaserOnCommand, not IO power pin)
+static bool turn_on_laser_sensor_by_command(LogBuffer& log) {
+#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+  ESP_LOGI(TAG, "[Diag] turn on laser sensor via command");
+  return LaserSensor::instance().turnOnByCommand(log);
+#else
+  (void)log;
+  return true;
+#endif
+}
 
 static void test_rtc() {
   DateTime now{};
@@ -66,6 +78,10 @@ static void test_sensor() {
     } else {
       ESP_LOGW(TAG, "[Sensor] read FAIL (warmup OK but read failed)");
     }
+#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+    // Keep laser turned on immediately after measurement throughout connectivity & diagnostic
+    turn_on_laser_sensor_by_command(log);
+#endif
   } else {
     ESP_LOGW(TAG, "[Sensor] FAIL (warmup failed or no sensor selected)");
   }
@@ -151,19 +167,6 @@ static bool fetch_and_sync_time(ICommModule* module, LogBuffer& log) {
   return true;
 }
 
-#include "board/pins.hpp"
-
-/// Turn on laser sensor via command (UART command kLaserOnCommand, not IO power pin)
-static bool turn_on_laser_sensor_by_command(LogBuffer& log) {
-#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
-  ESP_LOGI(TAG, "[Diag] turn on laser sensor via command");
-  return LaserSensor::instance().turnOnByCommand(log);
-#else
-  (void)log;
-  return true;
-#endif
-}
-
 static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
   if (!module) return false;
 
@@ -174,16 +177,30 @@ static bool measure_and_send_water_level(ICommModule* module, LogBuffer& log) {
   SensorManager& sm = SensorManager::instance();
   ISensor* active = nullptr;
   bool ok = false;
+#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+  active = &LaserSensor::instance();
+  if (active) {
+    int out[cfg::kDistanceSamples]{};
+    ok = sm.read3(active, out, log);
+    if (!ok) {
+      if (sm.ensureReady(active, log)) {
+        ok = sm.read3(active, out, log);
+      }
+    }
+    for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
+  } else {
+    ESP_LOGW(TAG, "[Portal] water_level measure FAIL (no laser sensor)");
+  }
+#else
   if (sm.ensureReady(active, log)) {
     int out[cfg::kDistanceSamples]{};
     ok = sm.read3(active, out, log);
-#if PINS_UART1_DEVICE != PINS_UART1_DEVICE_LASER
     active->finishMeasurement(log);
-#endif
     for (int i = 0; i < cfg::kDistanceSamples; ++i) mm.dist_mm[i] = out[i];
   } else {
     ESP_LOGW(TAG, "[Portal] water_level measure FAIL (sensor warmup failed)");
   }
+#endif
   mm.valid = ok;
 
   if (!ok) {
@@ -314,7 +331,7 @@ static void send_firmware_version_info(ICommModule* module, LogBuffer& log) {
 /// active window that follows uses the link for water-level sends, time sync and
 /// the fw-version/OTA check. Wi-Fi (DCOM) in particular stays up the whole time.
 static DiagConnResult test_connectivity() {
-  ESP_LOGI(TAG, "[Conn] testing SIM + DCOM in parallel (timeout %lu ms)...",
+  ESP_LOGI(TAG, "[Conn] testing DCOM only (SIM disabled in hardware, timeout %lu ms)...",
            (unsigned long)kConnDiagTimeoutMs);
 
   EventGroupHandle_t eg = xEventGroupCreate();
@@ -322,32 +339,19 @@ static DiagConnResult test_connectivity() {
   static ConnTaskParam dcom_param;
   dcom_param = {&DcomModule::instance(), eg, CONN_BIT_DCOM, false, false};
 
-  static ConnTaskParam sim_param;
-  sim_param = {&Sim4GModule::instance(), eg, CONN_BIT_SIM, false, false};
-
   xTaskCreate(&conn_module_task, "diag_dcom", 4096, &dcom_param, 7, nullptr);
-  xTaskCreate(&conn_module_task, "diag_sim",  4096, &sim_param,  7, nullptr);
 
-  // Wait until ANY module succeeds
+  // Wait until DCOM succeeds or timeout
   EventBits_t bits = xEventGroupWaitBits(
-      eg, CONN_BIT_ALL, pdFALSE, pdFALSE, pdMS_TO_TICKS(kConnDiagTimeoutMs));
-
-  // Grace period for the other module
-  if ((bits & CONN_BIT_ALL) != 0 && (bits & CONN_BIT_ALL) != CONN_BIT_ALL) {
-    ESP_LOGI(TAG, "[Conn] one ready, waiting 3s grace ...");
-    bits |= xEventGroupWaitBits(
-        eg, CONN_BIT_ALL, pdFALSE, pdTRUE, pdMS_TO_TICKS(3000));
-  }
+      eg, CONN_BIT_DCOM, pdFALSE, pdFALSE, pdMS_TO_TICKS(kConnDiagTimeoutMs));
 
   vEventGroupDelete(eg);
 
   bool dcom_ok = (bits & CONN_BIT_DCOM) != 0;
-  bool sim_ok  = (bits & CONN_BIT_SIM) != 0;
 
-  ESP_LOGI(TAG, "[Conn] result: DCOM=%s SIM=%s",
-           dcom_ok ? "OK" : "FAIL", sim_ok ? "OK" : "FAIL");
+  ESP_LOGI(TAG, "[Conn] result: DCOM=%s (SIM disabled)", dcom_ok ? "OK" : "FAIL");
 
-  return DiagConnResult{ .dcom_ok = dcom_ok, .sim_ok = sim_ok };
+  return DiagConnResult{ .dcom_ok = dcom_ok, .sim_ok = false };
 }
 
 // ============================================================
@@ -372,17 +376,15 @@ static void diagnostic_task_fn(void* arg) {
   DiagConnResult diag = test_connectivity();
 
   const char* wifi_status = DcomModule::instance().statusDetail();
-  const char* sim_status  = Sim4GModule::instance().statusDetail();
 
-  ESP_LOGI(TAG, "[Diagnostic] %s", wifi_status);
-  ESP_LOGI(TAG, "[Diagnostic] %s", sim_status);
+  ESP_LOGI(TAG, "[Diagnostic] %s | SIM disabled", wifi_status);
 
   LogMsg diag_lm{};
   RtcPcf8563::instance().getTime(diag_lm.time);
   diag_lm.meta.voltage_mv = AdcDrv::readMilliVolts();
   std::snprintf(diag_lm.text, sizeof(diag_lm.text),
-                "[Diagnostic] %s | %s",
-                wifi_status, sim_status);
+                "[Diagnostic] %s | SIM disabled",
+                wifi_status);
   diag_lm.len = static_cast<uint16_t>(std::min(std::strlen(diag_lm.text), sizeof(diag_lm.text) - 1));
 
   PublishApi::publishLog(diag_lm);
@@ -392,30 +394,16 @@ static void diagnostic_task_fn(void* arg) {
   // ========================================================
   // Diagnostic active window
   // ========================================================
-  // Keep the comm link up and exercise the full data path. Prefer Wi-Fi (DCOM)
-  // for the data path, fall back to SIM; the unused module is powered off to save
-  // current. Every cfg::kDiagCycleIntervalMs (30s) we send a water-level reading,
+  // Keep the comm link up and exercise the full data path via DCOM.
+  // SIM module is disabled in hardware.
+  // Every cfg::kDiagCycleIntervalMs (30s) we send a water-level reading,
   // sync the RTC from the server, and run the fw-version/OTA check.
-  //
-  // Window length:
-  //   - no OTA update -> fixed cfg::kDiagWindowMs (120s)
-  //   - OTA update    -> diag_ota_check blocks on the download with its own
-  //                      timeout and restarts the device on success, so the fixed
-  //                      window only bounds the no-OTA case.
   ICommModule* active = nullptr;
   const char* active_name = "none";
-  {
-    LogBuffer log = LogService::createSessionLog();
-    if (diag.dcom_ok) {
-      active = &DcomModule::instance();              // Wi-Fi stays up the whole window
-      active_name = "DCOM";
-      NvsStore::setLastSuccessComm(CommType::Dcom);
-      if (diag.sim_ok) Sim4GModule::instance().powerOff(log);  // unused on this path
-    } else if (diag.sim_ok) {
-      active = &Sim4GModule::instance();
-      active_name = "SIM4G";
-      NvsStore::setLastSuccessComm(CommType::Sim4G);
-    }
+  if (diag.dcom_ok) {
+    active = &DcomModule::instance();              // Wi-Fi stays up the whole window
+    active_name = "DCOM";
+    NvsStore::setLastSuccessComm(CommType::Dcom);
   }
 
   if (active) {
@@ -440,7 +428,7 @@ static void diagnostic_task_fn(void* arg) {
         measure_and_send_water_level(active, log);  // bắn dữ liệu mực nước
         turn_on_laser_sensor_by_command(log);       // bật cảm biến laser bằng command
         fetch_and_sync_time(active, log);           // sync time
-        if (first_cycle) {
+        if (cycle <= 3) {
           send_diagnostic_status_log(active, diag_lm, log);
           send_firmware_version_info(active, log);  // report current fw to dashboard
         }
@@ -458,6 +446,10 @@ static void diagnostic_task_fn(void* arg) {
 #endif
   } else {
     ESP_LOGW(TAG, "[Diag] no comm module reached internet, skipping active window");
+#if PINS_UART1_DEVICE == PINS_UART1_DEVICE_LASER
+    LogBuffer log = LogService::createSessionLog();
+    LaserSensor::instance().finishMeasurement(log);
+#endif
   }
 
   ESP_LOGI(TAG, "========== DIAGNOSTIC WINDOW COMPLETE ==========");
